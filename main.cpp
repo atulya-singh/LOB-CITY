@@ -7,7 +7,7 @@ int main() {
     // We pre-allocate 1,000 orders so we never talk to the OS during trading.
     OrderPool pool(1000); 
     
-    OrderBook book;
+    OrderBook book(&pool);
     std::cout << "=== HFT Engine Started (Zero-Allocation Mode) ===\n\n";
 
     // 2. Build the Ask Side using pool.acquire() instead of 'new'

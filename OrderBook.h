@@ -6,6 +6,9 @@
 
 class OrderBook{
     private:
+
+    OrderPool* pool;
+    
     std ::map<Price, PriceLevel, std::greater<Price>> bids;
 
     std::map<Price, PriceLevel> asks;
@@ -38,8 +41,7 @@ class OrderBook{
                 if(restingAsk->quantity == 0){
                     orderMap.erase(restingAsk->id);
                     bestAskLevel.removeOrder(restingAsk);
-
-                    //memory pool cleanup will come here later
+                    pool->release(restingAsk); //RECYLED
                 }
 
                 restingAsk = nextAsk;
@@ -79,7 +81,7 @@ class OrderBook{
                 if(restingBid->quantity == 0){
                     orderMap.erase(restingBid->id);
                     bestBidLevel.removeOrder(restingBid);
-                    //memory pool cleanup will come here later
+                    pool->release(restingBid);
                 }
                 restingBid = nextBid;
 
@@ -91,7 +93,7 @@ class OrderBook{
     }
 
     public:
-    OrderBook() = default;
+    OrderBook(OrderPool* p) : pool(p){}
 
     void addOrder(Order* order){
         orderMap[order->id] = order;
@@ -124,6 +126,7 @@ class OrderBook{
         asks.erase(order->price);
     }
 }
+pool->release(order); //RECYCLED!
     }
 
 public:
@@ -137,7 +140,7 @@ public:
         if(order->quantity > 0){
             addOrder(order);
         }else{
-            //In the future, we will return this pointer to the memory pool.
+            pool->release(order);//RECYCLED!
         }
       }
 };
