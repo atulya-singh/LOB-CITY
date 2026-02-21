@@ -22,6 +22,8 @@ struct PriceLevel{
     Order* tail;
     Quantity totalVolume;
 
+    PriceLevel() : price(0), head(nullptr), tail(nullptr), totalVolume(0){}
+
     PriceLevel(Price p_): price(p_), head(nullptr), tail(nullptr), totalVolume(0){}
 
     void appendOrder(Order* order){
