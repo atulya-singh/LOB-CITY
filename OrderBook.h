@@ -21,4 +21,34 @@ struct PriceLevel{
     Quantity totalVolume;
 
     PriceLevel(Price p_): price(p_), head(nullptr), tail(nullptr), totalVolume(0){}
+
+    void appendOrder(Order* order){
+        if(head == nullptr){
+            head = order;
+            tail = order;
+        }else{
+            tail->next = order;
+            order->prev = tail;
+            tail = order;
+
+        }
+        totalVolume += order->quantity;
+    }
+
+    void removeOrder(Order* order){
+        if(order->prev != nullptr){
+            order->prev->next = order->next;
+        }else{
+            head = order->next;
+        }
+
+        if(order->next != nullptr){
+            order->next->prev = order->prev;
+        }else{
+            tail = order->prev;
+        }
+        totalVolume -= order->quantity;
+        order->next = nullptr;
+        order->prev = nullptr;
+    }
 };
