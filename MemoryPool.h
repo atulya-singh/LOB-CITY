@@ -1,6 +1,6 @@
 #pragma once
 #include <vector>
-#include "OrderBook.h" // We need this to know what an 'Order' looks like
+#include "types.h" // We need this to know what an 'Order' looks like
 
 class OrderPool {
 private:
