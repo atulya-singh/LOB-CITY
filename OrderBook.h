@@ -71,6 +71,63 @@ class OrderBook{
             if (buyOrder->price < bestAskPrice){
                 break;
             }
+            Order* restingAsk = bestAskLevel.head;
+
+            while(restingAsk != nullptr && buyOrder->quantity > 0){
+                Quantity tradeQty = std::min(buyOrder->quantity, restingAsk->quantity);
+
+                buyOrder->quantity -= tradeQty;
+                restingAsk->quantity -= tradeQty;
+                
+                Order* nextAsk = restingAsk->next;
+
+                if(restingAsk->quantity == 0){
+                    orderMap.erase(restingAsk->id);
+                    bestAskLevel.removeOrder(restingAsk);
+
+                    //memory pool cleanup will come here later
+                }
+
+                restingAsk = nextAsk;
+            }
+            if (bestAskLevel.head == nullptr){
+                asks.erase(bestAskIt);
+            }
+
+        }
+    }
+
+    void matchSellOrder(Order* sellOrder){
+        while( sellOrder->quantity > 0 && !bids.empty()){
+            auto bestBidIt = bids.begin();
+            Price bestBidPrice = bestBidIt->first;
+            PriceLevel& bestBidLevel = bestBidIt->second;
+
+            if(sellOrder->price > bestBidPrice){
+                break;
+            }
+
+            Order* restingBid = bestBidLevel.head;
+
+            while(restingBid != nullptr && sellOrder->quantity > 0){
+                Quantity tradeQty = std::min(sellOrder->quantity, restingBid->quantity);
+
+                sellOrder->quantity -= tradeQty;
+                restingBid->quantity -= tradeQty;
+
+                Order* nextBid = restingBid->next;
+
+                if(restingBid->quantity == 0){
+                    orderMap.erase(restingBid->id);
+                    bestBidLevel.removeOrder(restingBid);
+                    //memory pool cleanup will come here later
+                }
+                restingBid = nextBid;
+
+            }
+            if(bestBidLevel.head == nullptr){
+                bids.erase(bestBidIt);
+            }
         }
     }
 
@@ -114,6 +171,14 @@ public:
       void processOrder(Order* order){
         if(order->side == Side::BUY){
             matchBuyOrder(order);
+        }else{
+            matchSellOrder(order);
+        }
+
+        if(order->quantity > 0){
+            addOrder(order);
+        }else{
+            //In the future, we will return this pointer to the memory pool.
         }
       }
 };
