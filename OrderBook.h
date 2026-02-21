@@ -1,6 +1,7 @@
 #pragma once
 #include "types.h"
-
+#include <map>
+#include <unordered_map>
 struct Order{
     OrderId id;
     Price price;
@@ -51,4 +52,16 @@ struct PriceLevel{
         order->next = nullptr;
         order->prev = nullptr;
     }
+};
+
+class OrderBook{
+    private:
+    std ::map<Price, PriceLevel, std::greater<Price>> bids;
+
+    std::map<Price, PriceLevel> asks;
+
+    std:: unordered_map<OrderId, Order*> orderMap;
+
+    public:
+    OrderBook() = default;
 };
