@@ -2,6 +2,7 @@
 #include "types.h"
 #include <map>
 #include <unordered_map>
+#include <iostream>
 struct Order{
     OrderId id;
     Price price;
@@ -79,6 +80,10 @@ class OrderBook{
                 buyOrder->quantity -= tradeQty;
                 restingAsk->quantity -= tradeQty;
                 
+                std::cout << "[-] TRADE EXECUTED! Buyer: " << buyOrder->id 
+          << " | Seller: " << restingAsk->id 
+          << " | Price: " << bestAskPrice 
+          << " | Qty: " << tradeQty << "\n";
                 Order* nextAsk = restingAsk->next;
 
                 if(restingAsk->quantity == 0){
@@ -114,6 +119,11 @@ class OrderBook{
 
                 sellOrder->quantity -= tradeQty;
                 restingBid->quantity -= tradeQty;
+
+                std::cout << "[-] TRADE EXECUTED! Buyer: " << restingBid->id 
+          << " | Seller: " << sellOrder->id 
+          << " | Price: " << bestBidPrice 
+          << " | Qty: " << tradeQty << "\n";
 
                 Order* nextBid = restingBid->next;
 
