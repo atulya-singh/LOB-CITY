@@ -62,6 +62,18 @@ class OrderBook{
 
     std:: unordered_map<OrderId, Order*> orderMap;
 
+    void matchBuyOrder(Order* buyOrder){
+        while(buyOrder->quantity >0 && !asks.empty()){
+            auto bestAskIt = asks.begin();
+            Price bestAskPrice = bestAskIt->first;
+            PriceLevel& bestAskLevel = bestAskIt->second;
+
+            if (buyOrder->price < bestAskPrice){
+                break;
+            }
+        }
+    }
+
     public:
     OrderBook() = default;
 
@@ -97,4 +109,11 @@ class OrderBook{
     }
 }
     }
+
+public:
+      void processOrder(Order* order){
+        if(order->side == Side::BUY){
+            matchBuyOrder(order);
+        }
+      }
 };
