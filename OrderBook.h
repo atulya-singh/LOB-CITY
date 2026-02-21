@@ -64,4 +64,37 @@ class OrderBook{
 
     public:
     OrderBook() = default;
+
+    void addOrder(Order* order){
+        orderMap[order->id] = order;
+
+        if(order->side == Side :: BUY){
+            bids[order->price].appendOrder(order);
+        }else{
+            asks[order->price].appendOrder(order);
+        }
+    }
+
+    void cancelOrder(OrderId id){
+        auto it = orderMap.find(id);
+        if(it == orderMap.end()){
+            return;
+        }
+
+        Order* order = it->second;
+        orderMap.erase(it);
+
+        if(order->side == Side::BUY){
+            bids[order->price].removeOrder(order);
+
+            if(bids[order->price].head == nullptr)
+{
+             bids.erase(order->price);
+}        }else{
+    asks[order->price].removeOrder(order);
+    if(asks[order->price].head == nullptr){
+        asks.erase(order->price);
+    }
+}
+    }
 };
