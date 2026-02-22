@@ -4,6 +4,8 @@
 #include <unordered_map>
 #include <iostream>
 
+class OrderPool;
+
 class OrderBook{
     private:
 
