@@ -98,3 +98,22 @@ void OrderBook::cancelOrder(OrderId id) {
     }
     pool->release(order);
 }
+void OrderBook::display() {
+    std::cout << "\n========== CURRENT MARKET BOOK ==========\n";
+    std::cout << "  ASKS (Sellers)\n";
+    if (asks.empty()) std::cout << "  (Empty)\n";
+    // Asks are in ascending order (lowest first)
+    for (auto const& [price, level] : asks) {
+        std::cout << "  Price: $" << (price / 100.0) << " | Qty: " << level.totalVolume << "\n";
+    }
+
+    std::cout << "  ---------------------------------------\n";
+
+    std::cout << "  BIDS (Buyers)\n";
+    if (bids.empty()) std::cout << "  (Empty)\n";
+    // Bids are in descending order (highest first) due to std::greater
+    for (auto const& [price, level] : bids) {
+        std::cout << "  Price: $" << (price / 100.0) << " | Qty: " << level.totalVolume << "\n";
+    }
+    std::cout << "=========================================\n\n";
+}

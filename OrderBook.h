@@ -22,4 +22,5 @@ public:
 
     void cancelOrder(OrderId id);
     void processOrder(Order* order);
+    void display();
 };
