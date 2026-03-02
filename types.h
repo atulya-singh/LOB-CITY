@@ -12,7 +12,6 @@ struct Order {
     Price price;
     Quantity quantity;
     Side side;
-
     Order* next;
     Order* prev;
 
@@ -42,16 +41,12 @@ struct PriceLevel {
     }
 
     void removeOrder(Order* order){
-        if(order->prev != nullptr){
-            order->prev->next = order->next;
-        } else {
-            head = order->next;
-        }
-        if(order->next != nullptr){
-            order->next->prev = order->prev;
-        } else {
-            tail = order->prev;
-        }
+        if(order->prev != nullptr) order->prev->next = order->next;
+        else head = order->next;
+
+        if(order->next != nullptr) order->next->prev = order->prev;
+        else tail = order->prev;
+
         totalVolume -= order->quantity;
         order->next = nullptr;
         order->prev = nullptr;
