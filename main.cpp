@@ -74,6 +74,44 @@ void runBenchmark(OrderBook& book, OrderPool& pool) {
     std::cout << "Average Latency: " << (duration / 1000.0) << " ns\n";
     std::cout << "Throughput: " << (1000.0 / (duration / 1e9)) << " orders/sec\n";
 }
+void runEndToEndBenchmark(OrderEntryGateway& gateway) {
+    std::vector<std::string> fixMessages;
+    fixMessages.reserve(1000);
+
+    // Pre-generate 1,000 raw FIX messages
+    for (int i = 0; i < 1000; ++i) {
+        // Incrementing Tag 11 (ClOrdID) so each order is unique
+        // Setting Tag 54=2 (Sell), Tag 38=10 (Qty), Tag 44=101.5 (Price), Tag 40=2 (Limit)
+        std::string msg = "8=FIX.4.2\x01" "35=D\x01" "11=" + std::to_string(1000 + i) + 
+                          "\x01" "54=2\x01" "38=10\x01" "44=101.5\x01" "40=2\x01";
+        fixMessages.push_back(msg);
+    }
+
+    std::cout << ">>> Running End-to-End Latency Benchmark (1,000 FIX strings -> Parser -> Gateway -> Engine)...\n";
+
+    ParsedFixMessage parsedMsg;
+    
+    // START THE CLOCK
+    auto start = std::chrono::high_resolution_clock::now();
+    
+    for (const auto& msg : fixMessages) {
+        // 1. Parse the string
+        if (parseFixMessage(msg.c_str(), msg.length(), parsedMsg)) {
+            // 2. Route through Gateway (allocates from pool + maps data)
+            // 3. Gateway dispatches to the OrderBook
+            gateway.onParsedMessage(parsedMsg); 
+        }
+    }
+    
+    // STOP THE CLOCK
+    auto end = std::chrono::high_resolution_clock::now();
+
+    auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count();
+
+    std::cout << "Total end-to-end time: " << duration << " ns\n";
+    std::cout << "Average Pipeline Latency: " << (duration / 1000.0) << " ns per order\n";
+    std::cout << "End-to-End Throughput: " << (1000.0 / (duration / 1e9)) << " messages/sec\n\n";
+}
 
 int main() {
     // Standard setup
@@ -89,6 +127,8 @@ int main() {
 
     // 3. See how fast the engine is
     runBenchmark(book, pool);
+
+    runEndToEndBenchmark(gateway);
 
     return 0;
 }
