@@ -5,6 +5,12 @@
 #include "MemoryPool.h"
 #include "FixParser.h"
 #include "OrderEntryGateway.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <cstring>
+
 
 // Note: Ensure you have #define ENABLE_LOGGING in OrderBook.cpp 
 // if you want to see the "TRADE" messages for the Functional Test!
@@ -111,6 +117,29 @@ void runEndToEndBenchmark(OrderEntryGateway& gateway) {
     std::cout << "Total end-to-end time: " << duration << " ns\n";
     std::cout << "Average Pipeline Latency: " << (duration / 1000.0) << " ns per order\n";
     std::cout << "End-to-End Throughput: " << (1000.0 / (duration / 1e9)) << " messages/sec\n\n";
+}
+
+void runTCPServer(OrderEntryGateway& gateway){
+    int server_fd, new_socket;
+    struct sockaddr_in address;
+    int opt = 1;
+    socklen_t addrlen = sizeof(address);
+    char buffer[1024] = {0};// buffer to hold incoming network bytes
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == 0){
+        std::cerr << "Socket creation failed\n";
+        return;
+    }
+
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY; // listens on LOCAL IP
+    address.sin_port = htons(5000); // PORT 5000
+
+    
+
+    
 }
 
 int main() {
