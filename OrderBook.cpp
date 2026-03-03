@@ -2,6 +2,7 @@
 #include "MemoryPool.h"
 #include <iostream>
 #include <algorithm>
+#include <chrono>
 
 // Uncomment the line below if you want to see trade messages again
 // #define ENABLE_LOGGING 
@@ -94,6 +95,7 @@ void OrderBook::processOrder(Order* order) {
     }else{
         pool->release(order);
     }
+    publishBBO();
 }
 
 void OrderBook::cancelOrder(OrderId id) {
@@ -111,9 +113,44 @@ void OrderBook::cancelOrder(OrderId id) {
         if (asks[order->price].head == nullptr) asks.erase(order->price);
     }
     pool->release(order);
+
+    publishBBO();
 }
 
 void OrderBook::display() {
     // Keep this empty or commented out during the benchmark 
     // to ensure 0% I/O overhead.
+}
+void OrderBook::publishBBO() {
+    if (!udpPub) return; // Safety check in case we run a test without the publisher
+
+    BboMessage msg;
+    msg.messageType = 'B';
+    
+    // Get the current time in nanoseconds
+    auto now = std::chrono::high_resolution_clock::now();
+    msg.timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+
+    // Grab the Best Bid (Highest price in the descending map)
+    if (!bids.empty()) {
+        auto bestBid = bids.begin();
+        msg.bestBidPrice = bestBid->first;
+        msg.bestBidQty = bestBid->second.totalVolume;
+    } else {
+        msg.bestBidPrice = 0;
+        msg.bestBidQty = 0;
+    }
+
+    // Grab the Best Ask (Lowest price in the ascending map)
+    if (!asks.empty()) {
+        auto bestAsk = asks.begin();
+        msg.bestAskPrice = bestAsk->first;
+        msg.bestAskQty = bestAsk->second.totalVolume;
+    } else {
+        msg.bestAskPrice = 0;
+        msg.bestAskQty = 0;
+    }
+
+    // Blast it to the network! (Zero allocations, just raw bytes)
+    udpPub->publishBbo(msg);
 }
