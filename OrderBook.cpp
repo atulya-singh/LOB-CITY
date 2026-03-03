@@ -3,12 +3,15 @@
 #include <iostream>
 #include <algorithm>
 
+// Uncomment the line below if you want to see trade messages again
+// #define ENABLE_LOGGING 
+
 void OrderBook::matchBuyOrder(Order* buyOrder) {
     while (buyOrder->quantity > 0 && !asks.empty()) {
         auto bestAskIt = asks.begin();
         PriceLevel& bestAskLevel = bestAskIt->second;
 
-        if (buyOrder->price < bestAskIt->first) break;
+        if (!buyOrder->isMarket && buyOrder->price < bestAskIt->first) break;
 
         Order* restingAsk = bestAskLevel.head;
         while (restingAsk != nullptr && buyOrder->quantity > 0) {
@@ -16,10 +19,12 @@ void OrderBook::matchBuyOrder(Order* buyOrder) {
             
             buyOrder->quantity -= tradeQty;
             restingAsk->quantity -= tradeQty;
-            bestAskLevel.totalVolume -= tradeQty; // Keep volume in sync
+            bestAskLevel.totalVolume -= tradeQty;
 
+#ifdef ENABLE_LOGGING
             std::cout << "[-] TRADE: Buyer " << buyOrder->id << " filled " << tradeQty 
                       << " @ " << bestAskIt->first << " against Seller " << restingAsk->id << "\n";
+#endif
 
             Order* nextAsk = restingAsk->next;
             if (restingAsk->quantity == 0) {
@@ -38,7 +43,7 @@ void OrderBook::matchSellOrder(Order* sellOrder) {
         auto bestBidIt = bids.begin();
         PriceLevel& bestBidLevel = bestBidIt->second;
 
-        if (sellOrder->price > bestBidIt->first) break;
+        if (!sellOrder->isMarket && sellOrder->price > bestBidIt->first) break;
 
         Order* restingBid = bestBidLevel.head;
         while (restingBid != nullptr && sellOrder->quantity > 0) {
@@ -48,8 +53,10 @@ void OrderBook::matchSellOrder(Order* sellOrder) {
             restingBid->quantity -= tradeQty;
             bestBidLevel.totalVolume -= tradeQty;
 
+#ifdef ENABLE_LOGGING
             std::cout << "[-] TRADE: Seller " << sellOrder->id << " filled " << tradeQty 
                       << " @ " << bestBidIt->first << " against Buyer " << restingBid->id << "\n";
+#endif
 
             Order* nextBid = restingBid->next;
             if (restingBid->quantity == 0) {
@@ -98,22 +105,8 @@ void OrderBook::cancelOrder(OrderId id) {
     }
     pool->release(order);
 }
+
 void OrderBook::display() {
-    std::cout << "\n========== CURRENT MARKET BOOK ==========\n";
-    std::cout << "  ASKS (Sellers)\n";
-    if (asks.empty()) std::cout << "  (Empty)\n";
-    // Asks are in ascending order (lowest first)
-    for (auto const& [price, level] : asks) {
-        std::cout << "  Price: $" << (price / 100.0) << " | Qty: " << level.totalVolume << "\n";
-    }
-
-    std::cout << "  ---------------------------------------\n";
-
-    std::cout << "  BIDS (Buyers)\n";
-    if (bids.empty()) std::cout << "  (Empty)\n";
-    // Bids are in descending order (highest first) due to std::greater
-    for (auto const& [price, level] : bids) {
-        std::cout << "  Price: $" << (price / 100.0) << " | Qty: " << level.totalVolume << "\n";
-    }
-    std::cout << "=========================================\n\n";
+    // Keep this empty or commented out during the benchmark 
+    // to ensure 0% I/O overhead.
 }

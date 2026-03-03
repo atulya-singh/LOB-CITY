@@ -12,11 +12,12 @@ struct Order {
     Price price;
     Quantity quantity;
     Side side;
+    bool isMarket;
     Order* next;
     Order* prev;
 
-    Order(OrderId id_, Price p_, Quantity q_, Side s_)
-    : id(id_), price(p_), quantity(q_), side(s_), next(nullptr), prev(nullptr){}
+    Order(OrderId id_, Price p_, Quantity q_, Side s_, bool m_ = false)
+    : id(id_), price(p_), quantity(q_), side(s_), isMarket(m_), next(nullptr), prev(nullptr){}
 };
 
 struct PriceLevel {
