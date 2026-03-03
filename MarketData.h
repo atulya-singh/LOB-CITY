@@ -11,4 +11,4 @@ struct BboMessage{
     int16_t bestAskPrice;
     uint32_t bestAskQty;
 };
-#pragma pack(drop)
+#pragma pack(pop)
