@@ -119,52 +119,75 @@ void runEndToEndBenchmark(OrderEntryGateway& gateway) {
     std::cout << "End-to-End Throughput: " << (1000.0 / (duration / 1e9)) << " messages/sec\n\n";
 }
 
-void runTCPServer(OrderEntryGateway& gateway){
+void runTCPServer(OrderEntryGateway& gateway) {
     int server_fd, new_socket;
     struct sockaddr_in address;
     int opt = 1;
     socklen_t addrlen = sizeof(address);
-    char buffer[1024] = {0};// buffer to hold incoming network bytes
+    char buffer[1024] = {0}; // Buffer to hold incoming network bytes
 
+    // 1. Create the main server socket
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd == 0){
+    if (server_fd == 0) {
         std::cerr << "Socket creation failed\n";
         return;
     }
 
+    // 2. Configure socket to reuse the port
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY; // listens on LOCAL IP
-    address.sin_port = htons(5000); // PORT 5000
+    address.sin_addr.s_addr = INADDR_ANY; // Listens on LOCAL IP
+    address.sin_port = htons(5050);       // Port 5050
 
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0){
+    // 3. Bind the socket to the port
+    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
         std::cerr << "Bind failed\n";
         return;
     }
-    if (listen(server_fd, 3) < 0){
+    
+    // 4. Start listening for incoming connections
+    if (listen(server_fd, 3) < 0) {
         std::cerr << "Listen failed\n";
         return;
     }
 
-    std::cout << "[+] Client connected! Ready to recieve orders.\n";
+    // 5. THE OUTER LOOP: Keep the server alive forever
+    while (true) {
+        std::cout << "\n>>> Server is listening on Port 5050. Waiting for Market Replayer...\n";
 
-    ParsedFixMessage parsedMsg;
-    while (true){
-        ssize_t valread = read(new_socket, buffer, sizeof(buffer)-1);
-
-        if (valread <= 0){
-            std::cout << "[-] Client disconnected or error occurred.\n";
-            break;
+        // 6. ACCEPT: This blocks and waits until a client actually connects
+        new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen);
+        if (new_socket < 0) {
+            std::cerr << "Accept failed\n";
+            continue; // If it fails, go back to the top and wait again
         }
-        buffer[valread] = '\0';
-        if (parseFixMessage(buffer, valread, parsedMsg)){
-            gateway.onParsedMessage(parsedMsg);
-            std::cout << "Processed Order ID : " << parsedMsg.clOrdID << "\n";
 
+        std::cout << "[+] Client connected! Ready to receive orders.\n";
+
+        ParsedFixMessage parsedMsg;
+        
+        // 7. THE INNER LOOP: Read bytes continuously until this specific client hangs up
+        while (true) {
+            ssize_t valread = read(new_socket, buffer, sizeof(buffer)-1);
+
+            if (valread <= 0) {
+                std::cout << "[-] Client disconnected. Resetting for next connection...\n";
+                close(new_socket); // Hang up the client's dedicated line
+                break; // Break out of the inner loop to go back to accept()
+            }
+            
+            buffer[valread] = '\0'; // Safety null-termination
+            
+            // 8. Feed the network bytes to your parser and matching engine
+            if (parseFixMessage(buffer, valread, parsedMsg)) {
+                gateway.onParsedMessage(parsedMsg);
+                
+                // Note: Printing to the console is very slow! 
+                // Comment this line out when you want to measure maximum throughput.
+                // std::cout << "Processed Order ID : " << parsedMsg.clOrdID << "\n";
+            }
         }
     }
-    close(new_socket);
-    close(server_fd);
 }
 
 
