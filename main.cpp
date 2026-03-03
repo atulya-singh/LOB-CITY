@@ -137,10 +137,36 @@ void runTCPServer(OrderEntryGateway& gateway){
     address.sin_addr.s_addr = INADDR_ANY; // listens on LOCAL IP
     address.sin_port = htons(5000); // PORT 5000
 
-    
+    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0){
+        std::cerr << "Bind failed\n";
+        return;
+    }
+    if (listen(server_fd, 3) < 0){
+        std::cerr << "Listen failed\n";
+        return;
+    }
 
-    
+    std::cout << "[+] Client connected! Ready to recieve orders.\n";
+
+    ParsedFixMessage parsedMsg;
+    while (true){
+        ssize_t valread = read(new_socket, buffer, sizeof(buffer)-1);
+
+        if (valread <= 0){
+            std::cout << "[-] Client disconnected or error occurred.\n";
+            break;
+        }
+        buffer[valread] = '\0';
+        if (parseFixMessage(buffer, valread, parsedMsg)){
+            gateway.onParsedMessage(parsedMsg);
+            std::cout << "Processed Order ID : " << parsedMsg.clOrdID << "\n";
+
+        }
+    }
+    close(new_socket);
+    close(server_fd);
 }
+
 
 int main() {
     // Standard setup
@@ -158,6 +184,8 @@ int main() {
     runBenchmark(book, pool);
 
     runEndToEndBenchmark(gateway);
+
+    runTCPServer(gateway);
 
     return 0;
 }
