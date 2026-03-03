@@ -3,7 +3,7 @@ import struct
 
 # Configuration mapping your C++ UdpPublisher
 MULTICAST_GROUP = '239.255.0.1'
-PORT = 3000
+PORT = 3050
 
 # The struct format string tells Python how to unpack the C++ bytes:
 # c = char (1 byte)

@@ -196,6 +196,7 @@ int main() {
     OrderPool pool(20000); 
     OrderBook book(&pool);
     OrderEntryGateway gateway(&pool, &book);
+    UdpPublisher udpPub("239.255.0.1", 3050);
 
     // 1. Prove the core engine works
     runFunctionalTest(book, pool);
