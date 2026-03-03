@@ -85,8 +85,15 @@ void OrderBook::processOrder(Order* order) {
     if (order->side == Side::BUY) matchBuyOrder(order);
     else matchSellOrder(order);
 
-    if (order->quantity > 0) addOrder(order);
-    else pool->release(order);
+    if(order->quantity >0){
+        if(order->isMarket){
+            pool->release(order);
+        }else{
+            addOrder(order);
+        }
+    }else{
+        pool->release(order);
+    }
 }
 
 void OrderBook::cancelOrder(OrderId id) {

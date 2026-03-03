@@ -24,10 +24,10 @@ public:
         }
     }
 
-    Order* acquire(OrderId id, Price p, Quantity q, Side s) {
+    Order* acquire(OrderId id, Price p, Quantity q, Side s, bool m = false) {
         Order* order;
         if (freeList.empty()) {
-            order = new Order(id, p, q, s);
+            order = new Order(id, p, q, s, m);
             allAllocated.push_back(order);
             return order;
         }
@@ -39,6 +39,7 @@ public:
         order->price = p;
         order->quantity = q;
         order->side = s;
+        order->isMarket = m;
         order->next = nullptr;
         order->prev = nullptr;
         
