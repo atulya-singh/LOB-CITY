@@ -36,7 +36,7 @@ void runPipelineTest(OrderEntryGateway& gateway) {
     // Simulate an incoming raw FIX message from the network: 
     // New Order Single (35=D), ID 999 (11=999), Buy (54=1), Qty 100 (38=100), Price 150.5 (44=150.5), Limit (40=2)
     const char* rawNetworkData = "8=FIX.4.2\x01" "35=D\x01" "11=999\x01" "54=1\x01" "38=100\x01" "44=150.5\x01" "40=2\x01";
-    size_t dataLength = 65; // Approximate length of the string above
+    size_t dataLength = std::strlen(rawNetworkData); // Approximate length of the string above
 
     ParsedFixMessage parsedMsg;
     
