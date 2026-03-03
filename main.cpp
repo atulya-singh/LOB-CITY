@@ -3,6 +3,8 @@
 #include <vector>
 #include "OrderBook.h"
 #include "MemoryPool.h"
+#include "FixParser.h"
+#include "OrderEntryGateway.h"
 
 // Note: Ensure you have #define ENABLE_LOGGING in OrderBook.cpp 
 // if you want to see the "TRADE" messages for the Functional Test!
@@ -26,6 +28,27 @@ void runFunctionalTest(OrderBook& book, OrderPool& pool) {
     // and the remainder should not be in the book.
     std::cout << "Market Order Remainder: " << mktOrder->quantity << " (Expected: 0)\n";
     std::cout << "--- FUNCTIONAL TEST COMPLETE ---\n\n";
+}
+
+void runPipelineTest(OrderEntryGateway& gateway) {
+    std::cout << "--- STARTING PIPELINE TEST (FIX -> Gateway -> Engine) ---\n";
+    
+    // Simulate an incoming raw FIX message from the network: 
+    // New Order Single (35=D), ID 999 (11=999), Buy (54=1), Qty 100 (38=100), Price 150.5 (44=150.5), Limit (40=2)
+    const char* rawNetworkData = "8=FIX.4.2\x01" "35=D\x01" "11=999\x01" "54=1\x01" "38=100\x01" "44=150.5\x01" "40=2\x01";
+    size_t dataLength = 65; // Approximate length of the string above
+
+    ParsedFixMessage parsedMsg;
+    
+    // Test the zero-allocation pipeline
+    if (parseFixMessage(rawNetworkData, dataLength, parsedMsg)) {
+        gateway.onParsedMessage(parsedMsg);
+        std::cout << "[+] Successfully parsed raw FIX string and dispatched Order 999 to the matching engine.\n";
+    } else {
+        std::cout << "[-] Failed to parse FIX message.\n";
+    }
+    
+    std::cout << "--- PIPELINE TEST COMPLETE ---\n\n";
 }
 
 void runBenchmark(OrderBook& book, OrderPool& pool) {
@@ -56,11 +79,15 @@ int main() {
     // Standard setup
     OrderPool pool(20000); 
     OrderBook book(&pool);
+    OrderEntryGateway gateway(&pool, &book);
 
-    // 1. Prove it works
+    // 1. Prove the core engine works
     runFunctionalTest(book, pool);
 
-    // 2. See how fast it is now
+    // 2. Prove the FIX-to-Engine pipeline works
+    runPipelineTest(gateway);
+
+    // 3. See how fast the engine is
     runBenchmark(book, pool);
 
     return 0;
