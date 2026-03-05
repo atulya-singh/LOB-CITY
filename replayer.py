@@ -12,10 +12,15 @@ def generate_fix_message(order_id):
     # Shifting prices slightly around 150.0
     price = 150.0 + (order_id % 10) 
     
-    # 8=FIX.4.2 | 35=D | 11=ID | 54=Side | 38=100 | 44=Price | 40=2
-    # Note: We use \x01 exactly as the C++ parser expects
-    msg = f"8=FIX.4.2\x0135=D\x0111={order_id}\x0154={side}\x0138=100\x0144={price:.2f}\x0140=2\x01"
-    return msg.encode('ascii') # Convert string to raw bytes for the network
+    msg = (f"8=FIX.4.2\x01"
+           f"35=D\x01"
+           f"11={order_id}\x01"
+           f"54={side}\x01"
+           f"38=100\x01"
+           f"44={price:.2f}\x01"
+           f"40=2\x01"
+           f"10=000\x01")  # ← terminating field
+    return msg.encode('ascii')
 
 def main():
     print(f"--- Market Replayer Starting ---")
