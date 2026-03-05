@@ -40,22 +40,24 @@ Compile the server with maximum optimizations and hardware-specific instruction 
 g++ -O3 -march=native -pthread main.cpp FixParser.cpp OrderBook.cpp -o lob_server
 ```
 
-###2. Start the Exchange
+### 2. Start the Exchange
 
 Run the compiled executable. The engine will automatically pin the Network IO and Matching Engine to separate threads and begin listening on TCP Port 5050.
 ```bash
 ./lob_server
 ```
 
-3. Connect the UDP Market Data Listener (Terminal 2)
+### 3. Connect the UDP Market Data Listener (Terminal 2)
 
 In a separate terminal, spin up the Python listener to tune into the 239.255.0.1:3050 multicast group and unpack the binary BBO structs in real-time.
 
-Bash
+```Bash
 python3 market_data_listener.py
-4. Blast Orders via Load Injector (Terminal 3)
+```
+### 4. Blast Orders via Load Injector (Terminal 3)
 
 In a third terminal, run the Python TCP load injector to generate in-memory FIX messages and blast them into the engine's TCP socket.
 
-Bash
+```Bash
 python3 replayer.py
+```
