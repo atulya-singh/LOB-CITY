@@ -8,7 +8,7 @@ struct BboMessage{
     uint64_t timestamp;
     int64_t bestBidPrice;
     uint32_t bestBidQty;
-    int16_t bestAskPrice;
+    int32_t bestAskPrice;
     uint32_t bestAskQty;
 };
 #pragma pack(pop)
