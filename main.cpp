@@ -7,6 +7,7 @@
 #include "OrderEntryGateway.h"
 #include "RingBuffer.h" // <-- The Lock-Free Queue
 #include "UdpPublisher.h"
+#include "LatencyTracker.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -184,6 +185,7 @@ int main() {
     runPipelineTest(gateway);
     runBenchmark(book, pool);
     runEndToEndBenchmark(gateway);
+    book.printLatencyReport();
 
     // --- START MULTI-THREADING ---
     // Spin up Thread 2 (The Matching Engine) in the background
