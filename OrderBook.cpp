@@ -1,5 +1,6 @@
 #include "OrderBook.h"
 #include "MemoryPool.h"
+#include "LatencyTracker.h"
 #include <iostream>
 #include <algorithm>
 #include <chrono>
@@ -83,6 +84,7 @@ void OrderBook::addOrder(Order* order) {
 }
 
 void OrderBook::processOrder(Order* order) {
+    auto start = std::chrono::high_resolution_clock::now();
     if (order->side == Side::BUY) matchBuyOrder(order);
     else matchSellOrder(order);
 
@@ -96,6 +98,15 @@ void OrderBook::processOrder(Order* order) {
         pool->release(order);
     }
     publishBBO();
+
+    auto end = std::chrono::high_resolution_clock::now();
+    uint64_t startNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        start.time_since_epoch()).count();
+    uint64_t endNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        end.time_since_epoch()).count();
+    latencyTracker.record(startNs, endNs);
+
+
 }
 
 void OrderBook::cancelOrder(OrderId id) {
