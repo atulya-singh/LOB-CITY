@@ -38,11 +38,14 @@ Benchmarked on a standard Apple Silicon architecture (macOS) without kernel-bypa
 Compile the server with maximum optimizations and hardware-specific instruction sets enabled:
 ```bash
 g++ -O3 -march=native -pthread main.cpp FixParser.cpp OrderBook.cpp -o lob_server
+```
 
-### 2. Start the Exchange
+###2. Start the Exchange
 
 Run the compiled executable. The engine will automatically pin the Network IO and Matching Engine to separate threads and begin listening on TCP Port 5050.
-```./lob_server```
+```bash
+./lob_server
+```
 
 3. Connect the UDP Market Data Listener (Terminal 2)
 
