@@ -115,15 +115,14 @@ void runTCPServer() {
     struct sockaddr_in address;
     int opt = 1;
     socklen_t addrlen = sizeof(address);
-    char buffer[1024] = {0}; 
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd == 0) return;
 
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY; 
-    address.sin_port = htons(5050);       
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(5050);
 
     if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
         std::cerr << "Bind failed\n";
@@ -132,32 +131,44 @@ void runTCPServer() {
     if (listen(server_fd, 3) < 0) return;
 
     while (true) {
-        std::cout << ">>> [Network Core] Listening on Port 5050. Waiting for Market Replayer...\n";
+        std::cout << ">>> [Network Core] Listening on Port 5050.\n";
         new_socket = accept(server_fd, (struct sockaddr*)&address, &addrlen);
         if (new_socket < 0) continue;
 
-        std::cout << "[+] Client connected! Pushing incoming orders to Ring Buffer.\n";
+        std::cout << "[+] Client connected!\n";
+
+        std::string accumulator;
+        accumulator.reserve(65536);
+        char readBuf[4096];          // ✅ only one buffer now
 
         ParsedFixMessage parsedMsg;
         while (true) {
-            ssize_t valread = read(new_socket, buffer, sizeof(buffer)-1);
+            ssize_t valread = read(new_socket, readBuf, sizeof(readBuf));  // ✅ read into readBuf
 
             if (valread <= 0) {
-                std::cout << "[-] Client disconnected. Resetting for next connection...\n\n";
-                close(new_socket); 
-                break; 
+                std::cout << "[-] Client disconnected.\n\n";
+                close(new_socket);
+                break;
             }
-            buffer[valread] = '\0'; 
-            
-            if (parseFixMessage(buffer, valread, parsedMsg)) {
-                // DROP DATA INTO QUEUE
-                // If the queue is full (engine is lagging behind network), spin and wait
-                while (!orderQueue.push(parsedMsg)) {
-                    // Backpressure handling
+
+            accumulator.append(readBuf, valread);  // ✅ append readBuf
+
+            while (true) {
+                size_t msgEnd = accumulator.find("10=");
+                if (msgEnd == std::string::npos) break;
+
+                size_t delimPos = accumulator.find('\x01', msgEnd);
+                if (delimPos == std::string::npos) break;
+
+                size_t msgLen = delimPos + 1;
+
+                if (parseFixMessage(accumulator.c_str(), msgLen, parsedMsg)) {  // ✅ parse accumulator
+                    while (!orderQueue.push(parsedMsg)) {}
                 }
-            }
-        }
-    }
+                accumulator.erase(0, msgLen);  // ✅ remove processed message
+            }   // ← closes inner while(true)
+        }       // ← closes middle while(true) — the read loop
+    }           // ← closes outer while(true) — the accept loop
 }
 
 int main() {
