@@ -3,6 +3,7 @@
 #include <map>
 #include <unordered_map>
 #include "UdpPublisher.h"
+#include "LatencyTracker.h"
 
 // Forward declaration to break circular dependency
 class OrderPool;
@@ -11,6 +12,7 @@ class OrderBook {
 private:
     OrderPool* pool;
     UdpPublisher* udpPub;
+    LatencyTracker LatencyTracker;
     
     std::map<Price, PriceLevel, std::greater<Price>> bids;
     std::map<Price, PriceLevel> asks;
@@ -27,4 +29,6 @@ public:
     void cancelOrder(OrderId id);
     void processOrder(Order* order);
     void display();
+
+    void printLatencyReport()const{LatencyTracker.printReport();}
 };
