@@ -75,16 +75,17 @@ void OrderBook::matchSellOrder(Order* sellOrder) {
 void OrderBook::addOrder(Order* order) {
     orderMap[order->id] = order;
     if (order->side == Side::BUY) {
-        if (bids.find(order->price) == bids.end()) bids[order->price] = PriceLevel(order->price);
-        bids[order->price].appendOrder(order);
+        bids.try_emplace(order->price, order->price).first->second.appendOrder(order);
     } else {
-        if (asks.find(order->price) == asks.end()) asks[order->price] = PriceLevel(order->price);
-        asks[order->price].appendOrder(order);
+        asks.try_emplace(order->price, order->price).first->second.appendOrder(order);
     }
 }
 
 void OrderBook::processOrder(Order* order) {
     auto start = std::chrono::high_resolution_clock::now();
+
+    Price bidBefore = bids.empty() ? 0: bids.begin()->first;
+    Price askBefore = asks.empty() ? 0: asks.begin()->first;
     if (order->side == Side::BUY) matchBuyOrder(order);
     else matchSellOrder(order);
 
@@ -97,16 +98,16 @@ void OrderBook::processOrder(Order* order) {
     }else{
         pool->release(order);
     }
-    publishBBO();
-
+    Price bidAfter = bids.empty() ? 0: bids.begin()->first;
+    Price askAfter = bids.empty() ? 0 : asks.begin()->first;
+    if(bidBefore != bidAfter || askBefore != askAfter){
+        publishBBO();
+    }
     auto end = std::chrono::high_resolution_clock::now();
-    uint64_t startNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        start.time_since_epoch()).count();
-    uint64_t endNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        end.time_since_epoch()).count();
-    latencyTracker.record(startNs, endNs);
-
-
+    latencyTracker.record(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count(),
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end.time_since_epoch()).count()
+    );
 }
 
 void OrderBook::cancelOrder(OrderId id) {
