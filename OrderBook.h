@@ -12,7 +12,7 @@ class OrderBook {
 private:
     OrderPool* pool;
     UdpPublisher* udpPub;
-    LatencyTracker LatencyTracker;
+    LatencyTracker latencyTracker;
     
     std::map<Price, PriceLevel, std::greater<Price>> bids;
     std::map<Price, PriceLevel> asks;
@@ -30,5 +30,5 @@ public:
     void processOrder(Order* order);
     void display();
 
-    void printLatencyReport()const{LatencyTracker.printReport();}
+    void printLatencyReport()const{latencyTracker.printReport();}
 };
