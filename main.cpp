@@ -186,6 +186,8 @@ int main() {
     runBenchmark(book, pool);
     runEndToEndBenchmark(gateway);
     book.printLatencyReport();
+    book.display();
+    book.printMarketStats();
 
     // --- START MULTI-THREADING ---
     // Spin up Thread 2 (The Matching Engine) in the background
