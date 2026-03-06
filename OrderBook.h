@@ -18,19 +18,25 @@ private:
     std::map<Price, PriceLevel, std::greater<Price>> bids;
     std::map<Price, PriceLevel> asks;
     std::unordered_map<OrderId, Order*> orderMap;
-    std::vector<Trade> tradelog;
+    std::vector<Trade> tradeLog;
 
     void matchBuyOrder(Order* buyOrder);
     void matchSellOrder(Order* sellOrder);
     void addOrder(Order* order);
     void publishBBO();
+    void recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty);
 
 public:
-    OrderBook(OrderPool* p, UdpPublisher* u = nullptr) : pool(p), udpPub(u) {}
+    OrderBook(OrderPool* p, UdpPublisher* u = nullptr) : pool(p), udpPub(u) {
+        tradeLog.reserve(1000000);
+    }
 
     void cancelOrder(OrderId id);
     void processOrder(Order* order);
     void display();
+    double getVWAP() const;
+    const std::vector<Trade>& getTradeLog() const { return tradeLog; }
+    void printMarketStats() const;
 
     void printLatencyReport()const{latencyTracker.printReport();}
 };
