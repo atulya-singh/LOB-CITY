@@ -99,7 +99,7 @@ void OrderBook::processOrder(Order* order) {
         pool->release(order);
     }
     Price bidAfter = bids.empty() ? 0: bids.begin()->first;
-    Price askAfter = bids.empty() ? 0 : asks.begin()->first;
+    Price askAfter = asks.empty() ? 0 : asks.begin()->first;
     if(bidBefore != bidAfter || askBefore != askAfter){
         publishBBO();
     }
