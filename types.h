@@ -7,6 +7,14 @@ using OrderId = uint64_t;
 
 enum class Side { BUY, SELL };
 
+struct Trade {
+    OrderId buyOrderId;
+    Order sellOrderId;
+    Price price;
+    Quantity Quantity;
+    u_int64_t timeStampNs;
+};
+
 struct alignas(64) Order {
     OrderId id;
     Price price;
