@@ -4,6 +4,7 @@
 #include <unordered_map>
 #include "UdpPublisher.h"
 #include "LatencyTracker.h"
+#include <vector>
 
 // Forward declaration to break circular dependency
 class OrderPool;
@@ -17,6 +18,7 @@ private:
     std::map<Price, PriceLevel, std::greater<Price>> bids;
     std::map<Price, PriceLevel> asks;
     std::unordered_map<OrderId, Order*> orderMap;
+    std::vector<Trade> tradelog;
 
     void matchBuyOrder(Order* buyOrder);
     void matchSellOrder(Order* sellOrder);
