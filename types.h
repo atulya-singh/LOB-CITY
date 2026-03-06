@@ -9,10 +9,10 @@ enum class Side { BUY, SELL };
 
 struct Trade {
     OrderId buyOrderId;
-    Order sellOrderId;
+    OrderId sellOrderId;
     Price price;
-    Quantity Quantity;
-    u_int64_t timeStampNs;
+    Quantity quantity;
+    uint64_t timeStampNs;
 };
 
 struct alignas(64) Order {

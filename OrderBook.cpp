@@ -10,7 +10,7 @@
 // #define ENABLE_LOGGING 
 void OrderBook::recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty){
     auto now = std::chrono::high_resolution_clock::now();
-    u_int64_t ts = std::chrono::duration_cast<std::chrono::nanoseconds>(
+    uint64_t ts = std::chrono::duration_cast<std::chrono::nanoseconds>(
         now.time_since_epoch()).count();
         tradeLog.push_back({buyId, sellId, price, qty, ts});
 }
