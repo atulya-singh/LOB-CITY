@@ -69,3 +69,60 @@ struct RiskStats {
         }
     }
 };
+
+//RISK ENGINE 
+class RiskEngine {
+    private:
+        RiskConfg config;
+        RiskStats stats;
+        //BBO Reference Prices
+        //These are the "anchor" prices that collar checks compare against
+        Price bestBid = 0;
+        Price bestAsk = 0;
+
+        //Rate limiter State
+        // Tracks message count within a rolling time window.
+    // In production, this would be per-client (keyed by session/clOrdID prefix).
+    // For simplicity, we track a single global rate.
+        u_int32_t windowMsgCount = 0;
+        uint64_t windowStartNs = 0;
+
+
+        //INDIVIDUAL CHECK FUNCTIONS
+
+        //CHECK 1 : BASIC VALIDITY
+        inline RiskRejectReason checkValidity(const ParsedFixMessage& msg) const {
+            if(msg.qty <= 0){
+                return RiskRejectReason::INVALID_QUANTITY;
+            }
+            if (msg.ordType !='1' && msg.price <=0){
+                return RiskRejectReason::INVALID_PRICE;
+            }
+            return RiskRejectReason::NONE;
+        }
+
+
+        //CHECK 2: FAT FINGER - Order Size 
+        //prevents a single order from being absurdly large
+        inline RiskRejectReason checkFatFingerSize(const ParsedFixMessage& msg) const{
+            if(static_cast<Quantity>(msg.qty) > config.maxOrderQty){
+                return RiskRejectReason::FAT_FINGER_SIZE;
+            }
+            return RiskRejectReason::NONE;
+        }
+
+
+        //CHECK 3 : FAT FINGER - NOTIONAL VALUE 
+        inline RiskRejectReason checkNotional(const ParsedFixMessage& msg) const{
+            if(msg.ordType == '1') return RiskRejectReason::NONE; //skip for market orders
+
+            int64_t notional = msg.price * msg.qty;
+            if(notional > config.maxNotional){
+                return RiskRejectReason::FAT_FINGER_NOTIONAL;
+            }
+            return RiskRejectReason::NONE;
+        }
+
+
+
+};
