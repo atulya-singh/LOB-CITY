@@ -45,7 +45,7 @@ bool parseFixMessage(const char* buffer, size_t length, ParsedFixMessage& outMsg
                 outMsg.clOrdID = std::string_view(ptr, valueEnd - ptr);
                 break;
             case 41: // OrigClOrdID (used in Cancel/Replace)
-                outMsg.origCLOrdID = std::string_view(ptr, valueEnd - ptr);
+                outMsg.origClOrdID = std::string_view(ptr, valueEnd - ptr);
                 break;
             // Ignore unneeded tags
         }

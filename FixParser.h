@@ -9,7 +9,7 @@ struct ParsedFixMessage {
     int64_t qty = 0;     
     int64_t price = 0;   
     std::string_view clOrdID;
-    std::string_view origCLOrdID; //TAG 41: Original order ID used in cancel/replace 
+    std::string_view origClOrdID; //TAG 41: Original order ID used in cancel/replace 
     
     void reset() {
         msgType = '\0';
@@ -18,7 +18,7 @@ struct ParsedFixMessage {
         qty = 0;
         price = 0;
         clOrdID = std::string_view();
-        origCLOrdID = std::string_view();
+        origClOrdID = std::string_view();
     }
 };
 
