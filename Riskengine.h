@@ -30,7 +30,7 @@ inline const char* rejectReasonToString(RiskRejectReason r) {
     }
 }
 
-struct RiskConfg{
+struct RiskConfig{
     //fat finger checks
     Quantity maxOrderQty = 1000000; // Max shares per single order
     int64_t maxNotional = 100000000000LL; // Max price * qty (in fixed point units)
@@ -73,7 +73,7 @@ struct RiskStats {
 //RISK ENGINE 
 class RiskEngine {
     private:
-        RiskConfg config;
+        RiskConfig config;
         RiskStats stats;
         //BBO Reference Prices
         //These are the "anchor" prices that collar checks compare against
@@ -182,7 +182,102 @@ class RiskEngine {
         }
         return RiskRejectReason::NONE;
     }
-
+public:
+    // Constructor — takes an optional config, defaults to sensible values
+    RiskEngine() : config() {}
+    RiskEngine(const RiskConfig& cfg) : config(cfg) {}
+ 
+    // --------------------------------------------------------
+    // THE MAIN ENTRY POINT
+    // Called by OrderEntryGateway for every incoming order.
+    // Runs all checks in sequence — fails fast on the first rejection.
+    //
+    // Returns NONE if the order passes, or the specific reject reason.
+    // --------------------------------------------------------
+    inline RiskRejectReason checkOrder(const ParsedFixMessage& msg) {
+        stats.totalChecked++;
+ 
+        // --- Run checks from cheapest to most expensive ---
+ 
+        RiskRejectReason result;
+ 
+        result = checkValidity(msg);
+        if (result != RiskRejectReason::NONE) {
+            stats.recordReject(result);
+            return result;
+        }
+ 
+        result = checkFatFingerSize(msg);
+        if (result != RiskRejectReason::NONE) {
+            stats.recordReject(result);
+            return result;
+        }
+ 
+        result = checkNotional(msg);
+        if (result != RiskRejectReason::NONE) {
+            stats.recordReject(result);
+            return result;
+        }
+ 
+        result = checkPriceCollar(msg);
+        if (result != RiskRejectReason::NONE) {
+            stats.recordReject(result);
+            return result;
+        }
+ 
+        result = checkRateLimit();
+        if (result != RiskRejectReason::NONE) {
+            stats.recordReject(result);
+            return result;
+        }
+ 
+        stats.totalPassed++;
+        return RiskRejectReason::NONE;
+    }
+ 
+    // --------------------------------------------------------
+    // BBO UPDATE
+    // Called by the gateway after the OrderBook processes an order.
+    // Keeps the risk engine's reference prices in sync with the market.
+    // --------------------------------------------------------
+    inline void updateBBO(Price bid, Price ask) {
+        bestBid = bid;
+        bestAsk = ask;
+    }
+ 
+    // --------------------------------------------------------
+    // CONFIG ACCESS
+    // Allows runtime tuning of risk parameters.
+    // --------------------------------------------------------
+    RiskConfig& getConfig() { return config; }
+    const RiskConfig& getConfig() const { return config; }
+ 
+    // --------------------------------------------------------
+    // STATISTICS REPORT
+    // --------------------------------------------------------
+    void printReport() const {
+        std::cout << "\n========== RISK ENGINE REPORT ==========\n";
+        std::cout << "Total Checked     : " << stats.totalChecked << "\n";
+        std::cout << "Total Passed      : " << stats.totalPassed  << "\n";
+        std::cout << "Total Rejected    : " << (stats.totalChecked - stats.totalPassed) << "\n";
+        
+        if (stats.totalChecked > stats.totalPassed) {
+            std::cout << "--- Rejection Breakdown ---\n";
+            if (stats.rejectInvalidPx  > 0) std::cout << "  Invalid Price   : " << stats.rejectInvalidPx  << "\n";
+            if (stats.rejectInvalidQty > 0) std::cout << "  Invalid Qty     : " << stats.rejectInvalidQty << "\n";
+            if (stats.rejectFatFinger  > 0) std::cout << "  Fat Finger Size : " << stats.rejectFatFinger  << "\n";
+            if (stats.rejectNotional   > 0) std::cout << "  Fat Finger $    : " << stats.rejectNotional   << "\n";
+            if (stats.rejectCollar     > 0) std::cout << "  Price Collar    : " << stats.rejectCollar     << "\n";
+            if (stats.rejectRateLimit  > 0) std::cout << "  Rate Limited    : " << stats.rejectRateLimit  << "\n";
+        }
+ 
+        if (stats.totalChecked > 0) {
+            double passRate = 100.0 * stats.totalPassed / stats.totalChecked;
+            std::cout << "Pass Rate         : " << std::fixed << std::setprecision(2) 
+                      << passRate << "%\n";
+        }
+        std::cout << "=========================================\n\n";
+    }
 
 
 };
