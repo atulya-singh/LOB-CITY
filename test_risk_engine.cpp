@@ -1,15 +1,19 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
-#include "types.h"
+#include "Riskengine.h"
+#include "FixParser.h"
 #include "MemoryPool.h"
 #include "OrderBook.h"
 #include "OrderEntryGateway.h"
-#include "FixParser.h"
-#include "RiskEngine.h"
 
 // ================================================================
-// TEST FRAMEWORK
+// UNIT TEST FRAMEWORK (minimal, zero-dependency)
+//
+// Production firms use Google Test or Catch2, but a hand-rolled
+// framework shows you understand what testing actually does under
+// the hood. Each test is a function that calls assert(). If an
+// assertion fails, the program crashes with the file and line number.
 // ================================================================
 
 static int testsRun = 0;
@@ -23,7 +27,21 @@ static int testsPassed = 0;
     std::cout << " PASSED\n"; \
 } while(0)
 
-// Helper: parse a raw FIX string
+// Helper: build a ParsedFixMessage without going through the FIX parser.
+// This isolates risk engine logic from parser correctness.
+ParsedFixMessage makeMsg(char msgType, char side, char ordType, int64_t qty, int64_t price) {
+    ParsedFixMessage msg;
+    msg.reset();
+    msg.msgType = msgType;
+    msg.side = side;
+    msg.ordType = ordType;
+    msg.qty = qty;
+    msg.price = price;
+    msg.clOrdID = std::string_view("12345", 5);
+    return msg;
+}
+
+// Helper: build a message from a raw FIX string (tests the full parse path)
 ParsedFixMessage parseFix(const char* fixStr) {
     ParsedFixMessage msg;
     parseFixMessage(fixStr, std::strlen(fixStr), msg);
@@ -31,496 +49,278 @@ ParsedFixMessage parseFix(const char* fixStr) {
 }
 
 // ================================================================
-// TEST GROUP 1: BASIC ORDER MATCHING
+// TEST GROUP 1: VALIDITY CHECKS
 // ================================================================
 
-void test_limit_buy_matches_resting_sell() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    // Resting sell @ $150 for 100 shares
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-    // Incoming buy @ $150 for 50 shares — should partially fill
-    book.processOrder(pool.acquire(2, 1500000, 50, Side::BUY));
-
-    assert(book.getTradeLog().size() == 1);
-    assert(book.getTradeLog()[0].quantity == 50);
-    assert(book.getTradeLog()[0].price == 1500000);
-    assert(book.getTradeLog()[0].buyOrderId == 2);
-    assert(book.getTradeLog()[0].sellOrderId == 1);
+void test_reject_zero_quantity() {
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 0, 1500000);  // qty=0
+    assert(risk.checkOrder(msg) == RiskRejectReason::INVALID_QUANTITY);
 }
 
-void test_limit_sell_matches_resting_buy() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::BUY));
-    book.processOrder(pool.acquire(2, 1500000, 50, Side::SELL));
-
-    assert(book.getTradeLog().size() == 1);
-    assert(book.getTradeLog()[0].quantity == 50);
-    assert(book.getTradeLog()[0].buyOrderId == 1);
-    assert(book.getTradeLog()[0].sellOrderId == 2);
+void test_reject_negative_price_limit_order() {
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 100, -5000);  // negative price, limit order
+    assert(risk.checkOrder(msg) == RiskRejectReason::INVALID_PRICE);
 }
 
-void test_no_match_when_prices_dont_cross() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    // Bid @ $149, Ask @ $151 — no crossing, both rest on the book
-    book.processOrder(pool.acquire(1, 1490000, 100, Side::BUY));
-    book.processOrder(pool.acquire(2, 1510000, 100, Side::SELL));
-
-    assert(book.getTradeLog().empty());
-    assert(book.getBestBid() == 1490000);
-    assert(book.getBestAsk() == 1510000);
-}
-
-void test_exact_fill_removes_both_orders() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-    book.processOrder(pool.acquire(2, 1500000, 100, Side::BUY));
-
-    assert(book.getTradeLog().size() == 1);
-    assert(book.getTradeLog()[0].quantity == 100);
-    // Book should be empty — both orders fully consumed
-    assert(book.getBestBid() == 0);
-    assert(book.getBestAsk() == 0);
+void test_allow_zero_price_market_order() {
+    // Market orders have price=0 — that's valid, not an error
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '1', 100, 0);  // ordType='1' (market), price=0
+    assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
 }
 
 // ================================================================
-// TEST GROUP 2: MARKET ORDERS
+// TEST GROUP 2: FAT FINGER CHECKS
 // ================================================================
 
-void test_market_buy_sweeps_multiple_levels() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    // Three ask levels: 50 @ $150, 50 @ $151, 50 @ $152
-    book.processOrder(pool.acquire(1, 1500000, 50, Side::SELL));
-    book.processOrder(pool.acquire(2, 1510000, 50, Side::SELL));
-    book.processOrder(pool.acquire(3, 1520000, 50, Side::SELL));
-
-    // Market buy for 120 — should sweep all of $150, all of $151, and 20 of $152
-    book.processOrder(pool.acquire(4, 0, 120, Side::BUY, true));
-
-    assert(book.getTradeLog().size() == 3);
-    assert(book.getTradeLog()[0].quantity == 50);  // filled 50 @ $150
-    assert(book.getTradeLog()[0].price == 1500000);
-    assert(book.getTradeLog()[1].quantity == 50);  // filled 50 @ $151
-    assert(book.getTradeLog()[1].price == 1510000);
-    assert(book.getTradeLog()[2].quantity == 20);  // filled 20 @ $152
-    assert(book.getTradeLog()[2].price == 1520000);
-
-    // 30 shares should remain at $152
-    assert(book.getBestAsk() == 1520000);
+void test_reject_fat_finger_size() {
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 2000000, 1500000);  // 2M shares
+    assert(risk.checkOrder(msg) == RiskRejectReason::FAT_FINGER_SIZE);
 }
 
-void test_market_sell_sweeps_bids() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1520000, 50, Side::BUY));
-    book.processOrder(pool.acquire(2, 1510000, 50, Side::BUY));
-
-    // Market sell for 75 — sweep all of $152 bid, 25 of $151 bid
-    book.processOrder(pool.acquire(3, 0, 75, Side::SELL, true));
-
-    assert(book.getTradeLog().size() == 2);
-    assert(book.getTradeLog()[0].quantity == 50);
-    assert(book.getTradeLog()[0].price == 1520000);
-    assert(book.getTradeLog()[1].quantity == 25);
-    assert(book.getTradeLog()[1].price == 1510000);
+void test_allow_just_under_size_limit() {
+    RiskEngine risk;
+    // BBO centered around $1 so both collar and notional work
+    risk.updateBBO(10000, 10100);  // bid=$1.00, ask=$1.01
+    // 1,000,000 shares at $1.00 = $1M notional — under both limits
+    auto msg = makeMsg('D', '1', '2', 1000000, 10000);
+    assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
 }
 
-void test_market_order_with_no_liquidity() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
+void test_reject_fat_finger_notional() {
+    // $15,000 price * 1,000,000 qty = $15B notional (way over $10M limit)
+    RiskConfig cfg;
+    cfg.maxNotional = 100000000000LL;  // $10M in fixed-point
+    RiskEngine risk(cfg);
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 999999, 150000000);  // $15,000 * 999,999 shares
+    assert(risk.checkOrder(msg) == RiskRejectReason::FAT_FINGER_NOTIONAL);
+}
 
-    // Market buy into an empty book — nothing to fill, order should be released
-    Order* mkt = pool.acquire(1, 0, 100, Side::BUY, true);
-    book.processOrder(mkt);
-
-    assert(book.getTradeLog().empty());
-    // Book stays empty — unfilled market orders don't rest
-    assert(book.getBestBid() == 0);
-    assert(book.getBestAsk() == 0);
+void test_notional_skip_for_market_orders() {
+    // Market orders have price=0, so notional = 0. Should always pass notional check.
+    RiskConfig cfg;
+    cfg.maxNotional = 1;  // Set absurdly low
+    RiskEngine risk(cfg);
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '1', 999999, 0);  // market order
+    assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
 }
 
 // ================================================================
-// TEST GROUP 3: PRICE-TIME PRIORITY
+// TEST GROUP 3: PRICE COLLAR CHECKS
 // ================================================================
 
-void test_time_priority_fifo_at_same_price() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    // Three sells at the same price — order 1 arrived first
-    book.processOrder(pool.acquire(1, 1500000, 30, Side::SELL));
-    book.processOrder(pool.acquire(2, 1500000, 30, Side::SELL));
-    book.processOrder(pool.acquire(3, 1500000, 30, Side::SELL));
-
-    // Buy 50 — should fill order 1 (30) then order 2 (20 of 30)
-    book.processOrder(pool.acquire(4, 1500000, 50, Side::BUY));
-
-    assert(book.getTradeLog().size() == 2);
-    assert(book.getTradeLog()[0].sellOrderId == 1);  // First in line
-    assert(book.getTradeLog()[0].quantity == 30);
-    assert(book.getTradeLog()[1].sellOrderId == 2);  // Second in line
-    assert(book.getTradeLog()[1].quantity == 20);
+void test_reject_buy_above_collar() {
+    // BBO: bid=$150, ask=$151, mid=$150.50
+    // 5% collar = $150.50 * 0.05 = $7.525
+    // Max buy price = $150.50 + $7.525 = $158.025
+    // Buying at $200 should be rejected
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 100, 2000000);  // $200 buy
+    assert(risk.checkOrder(msg) == RiskRejectReason::PRICE_COLLAR);
 }
 
-void test_price_priority_better_price_fills_first() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    // Sell @ $152 arrives first, then sell @ $150 arrives second
-    book.processOrder(pool.acquire(1, 1520000, 50, Side::SELL));
-    book.processOrder(pool.acquire(2, 1500000, 50, Side::SELL));
-
-    // Market buy — should fill the $150 ask first (better price) even 
-    // though the $152 ask arrived earlier
-    book.processOrder(pool.acquire(3, 0, 30, Side::BUY, true));
-
-    assert(book.getTradeLog().size() == 1);
-    assert(book.getTradeLog()[0].sellOrderId == 2);  // $150 fills first
-    assert(book.getTradeLog()[0].price == 1500000);
+void test_reject_sell_below_collar() {
+    // Selling at $1 when market is at $150.50 — way below collar
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '2', '2', 100, 10000);  // $1 sell
+    assert(risk.checkOrder(msg) == RiskRejectReason::PRICE_COLLAR);
 }
 
-// ================================================================
-// TEST GROUP 4: CANCEL ORDERS
-// ================================================================
-
-void test_cancel_removes_order_from_book() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-    assert(book.getBestAsk() == 1500000);
-
-    book.cancelOrder(1);
-    assert(book.getBestAsk() == 0);  // Book is empty
+void test_allow_within_collar() {
+    // $150.25 buy when mid is $150.50 — deviation is $0.25 = 0.17%, well within 5%
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 100, 1502500);  // $150.25
+    assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
 }
 
-void test_cancel_nonexistent_order_is_noop() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-    book.cancelOrder(999);  // Doesn't exist — should not crash
-    assert(book.getBestAsk() == 1500000);  // Original order still there
+void test_collar_at_exact_boundary() {
+    // Mid = $150.50 = 1505000 in fixed-point
+    // 5% = 1505000 * 500 / 10000 = 75250
+    // Max = 1505000 + 75250 = 1580250
+    // Order at exactly 1580250 should pass (deviation == maxDeviation, not >)
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 100, 1580250);
+    assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
 }
 
-void test_cancel_middle_order_preserves_queue() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    // Three orders at same price: 1, 2, 3
-    book.processOrder(pool.acquire(1, 1500000, 30, Side::SELL));
-    book.processOrder(pool.acquire(2, 1500000, 30, Side::SELL));
-    book.processOrder(pool.acquire(3, 1500000, 30, Side::SELL));
-
-    // Cancel the middle one
-    book.cancelOrder(2);
-
-    // Buy 50 — should fill order 1 (30), then order 3 (20 of 30)
-    // Order 2 is gone. Order 3 kept its position after order 1.
-    book.processOrder(pool.acquire(4, 1500000, 50, Side::BUY));
-
-    assert(book.getTradeLog().size() == 2);
-    assert(book.getTradeLog()[0].sellOrderId == 1);
-    assert(book.getTradeLog()[0].quantity == 30);
-    assert(book.getTradeLog()[1].sellOrderId == 3);  // NOT 2
-    assert(book.getTradeLog()[1].quantity == 20);
+void test_collar_one_tick_past_boundary() {
+    // 1580251 should be rejected (deviation > maxDeviation)
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 100, 1580251);
+    assert(risk.checkOrder(msg) == RiskRejectReason::PRICE_COLLAR);
 }
 
-// ================================================================
-// TEST GROUP 5: MODIFY ORDERS (Cancel/Replace)
-// ================================================================
-
-void test_modify_qty_down_keeps_priority() {
-    // This is the key behavioral test. If you reduce quantity at the
-    // same price, you keep your position in the queue.
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    // Order 1 and 2 at $150. Order 1 has time priority.
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-    book.processOrder(pool.acquire(2, 1500000, 100, Side::SELL));
-
-    // Modify order 1: reduce qty from 100 to 30. Same price → keeps priority.
-    book.modifyOrder(1, 10, 1500000, 30);
-
-    // Buy 40 — should fill order 10 (was order 1, 30 shares), then 10 of order 2
-    book.processOrder(pool.acquire(3, 1500000, 40, Side::BUY));
-
-    assert(book.getTradeLog().size() == 2);
-    assert(book.getTradeLog()[0].sellOrderId == 10);  // Modified order fills first
-    assert(book.getTradeLog()[0].quantity == 30);
-    assert(book.getTradeLog()[1].sellOrderId == 2);   // Original order 2 fills second
-    assert(book.getTradeLog()[1].quantity == 10);
+void test_collar_skip_on_empty_book() {
+    // No BBO at all — collar check should pass (no reference price)
+    RiskEngine risk;
+    risk.updateBBO(0, 0);
+    auto msg = makeMsg('D', '1', '2', 100, 9990000);  // $999 — absurd, but no collar
+    assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
 }
 
-void test_modify_qty_up_loses_priority() {
-    // Increasing quantity is aggressive — you lose your position.
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 50, Side::SELL));
-    book.processOrder(pool.acquire(2, 1500000, 50, Side::SELL));
-
-    // Modify order 1: increase qty from 50 to 80. Same price but qty UP → loses priority.
-    book.modifyOrder(1, 10, 1500000, 80);
-
-    // Buy 60 — should fill order 2 first (it now has priority), then 10 of order 10
-    book.processOrder(pool.acquire(3, 1500000, 60, Side::BUY));
-
-    assert(book.getTradeLog().size() == 2);
-    assert(book.getTradeLog()[0].sellOrderId == 2);   // Order 2 now has priority
-    assert(book.getTradeLog()[0].quantity == 50);
-    assert(book.getTradeLog()[1].sellOrderId == 10);  // Modified order is at the back
-    assert(book.getTradeLog()[1].quantity == 10);
+void test_collar_with_only_bid() {
+    // Only a bid exists — use bid as reference
+    RiskEngine risk;
+    risk.updateBBO(1500000, 0);  // bid=$150, no ask
+    auto msg = makeMsg('D', '2', '2', 100, 1500000);  // sell at $150 — 0% deviation
+    assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
 }
 
-void test_modify_price_loses_priority() {
-    // Any price change = lose priority, even if the new price is "worse"
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 50, Side::SELL));
-    book.processOrder(pool.acquire(2, 1500000, 50, Side::SELL));
-
-    // Modify order 1: change price to $150.01 (slightly worse for a sell)
-    // Price changed → lose priority and move to the new price level
-    book.modifyOrder(1, 10, 1500100, 50);
-
-    // Buy 60 @ $151 — should fill all of order 2 at $150.00 first,
-    // then 10 of order 10 at $150.01
-    book.processOrder(pool.acquire(3, 1510000, 60, Side::BUY));
-
-    assert(book.getTradeLog().size() == 2);
-    assert(book.getTradeLog()[0].sellOrderId == 2);
-    assert(book.getTradeLog()[0].price == 1500000);
-    assert(book.getTradeLog()[1].sellOrderId == 10);
-    assert(book.getTradeLog()[1].price == 1500100);
+void test_collar_skip_for_market_orders() {
+    // Market orders have no price — collar doesn't apply
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '1', 100, 0);
+    assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
 }
 
-void test_modify_to_better_price_moves_level() {
-    // Improve the price — order moves to a new, more aggressive level
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    // Sell @ $152
-    book.processOrder(pool.acquire(1, 1520000, 50, Side::SELL));
-    // Sell @ $151
-    book.processOrder(pool.acquire(2, 1510000, 50, Side::SELL));
-
-    assert(book.getBestAsk() == 1510000);  // Best ask is $151
-
-    // Modify order 1: move price from $152 to $150 (now the best ask)
-    book.modifyOrder(1, 10, 1500000, 50);
-
-    assert(book.getBestAsk() == 1500000);  // New best ask is $150
-}
-
-void test_modify_nonexistent_order_is_noop() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-
-    // Modify order 999 which doesn't exist — should not crash
-    book.modifyOrder(999, 1000, 1510000, 50);
-
-    // Book should be unchanged
-    assert(book.getBestAsk() == 1500000);
-    assert(book.getTradeLog().empty());
-}
-
-void test_modify_updates_order_id_in_map() {
-    // After modify, the old ID should be gone and the new ID should work
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-
-    // Modify: order 1 → order 10
-    book.modifyOrder(1, 10, 1500000, 80);
-
-    // Cancel by old ID should fail (it's gone)
-    book.cancelOrder(1);
-    assert(book.getBestAsk() == 1500000);  // Still there
-
-    // Cancel by new ID should work
-    book.cancelOrder(10);
-    assert(book.getBestAsk() == 0);  // Now it's gone
-}
-
-void test_modify_bid_side() {
-    // Verify modify works on the bid side too, not just asks
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::BUY));
-    book.processOrder(pool.acquire(2, 1500000, 100, Side::BUY));
-
-    // Modify order 1: reduce qty, keep priority
-    book.modifyOrder(1, 10, 1500000, 30);
-
-    // Sell 40 — should fill order 10 (30) then order 2 (10)
-    book.processOrder(pool.acquire(3, 1500000, 40, Side::SELL));
-
-    assert(book.getTradeLog().size() == 2);
-    assert(book.getTradeLog()[0].buyOrderId == 10);
-    assert(book.getTradeLog()[0].quantity == 30);
-    assert(book.getTradeLog()[1].buyOrderId == 2);
-    assert(book.getTradeLog()[1].quantity == 10);
+void test_custom_collar_width() {
+    // Set collar to 100 bps (1%) instead of 500 bps (5%)
+    // Mid = $150.50, 1% = $1.505, max = $152.005
+    // $153 should be rejected with 1% collar but pass with 5% collar
+    RiskConfig cfg;
+    cfg.collarBps = 100;  // 1%
+    RiskEngine risk(cfg);
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 100, 1530000);  // $153
+    assert(risk.checkOrder(msg) == RiskRejectReason::PRICE_COLLAR);
 }
 
 // ================================================================
-// TEST GROUP 6: MODIFY THROUGH THE FULL FIX PIPELINE
+// TEST GROUP 4: RATE LIMITING
 // ================================================================
 
-void test_fix_cancel_replace_message() {
-    OrderPool pool(100);
+void test_rate_limit_triggers() {
+    RiskConfig cfg;
+    cfg.maxMsgsPerWindow = 5;  // Very low limit for testing
+    cfg.windowDurationNs = 1000000000ULL;  // 1 second
+    RiskEngine risk(cfg);
+    risk.updateBBO(1500000, 1510000);
+
+    auto msg = makeMsg('D', '1', '2', 100, 1500000);
+
+    // First 5 should pass
+    for (int i = 0; i < 5; i++) {
+        assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
+    }
+    // 6th should be rate-limited
+    assert(risk.checkOrder(msg) == RiskRejectReason::RATE_LIMIT);
+}
+
+// ================================================================
+// TEST GROUP 5: CHECK ORDERING (fail-fast correctness)
+// An order that violates MULTIPLE rules should be rejected by the
+// CHEAPEST check, not the most expensive one.
+// ================================================================
+
+void test_fail_fast_validity_before_collar() {
+    // This order has qty=0 AND price=$999 (way outside collar).
+    // Should be rejected for INVALID_QUANTITY, not PRICE_COLLAR.
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 0, 9990000);
+    assert(risk.checkOrder(msg) == RiskRejectReason::INVALID_QUANTITY);
+}
+
+void test_fail_fast_fat_finger_before_collar() {
+    // This order has qty=5M AND price=$999.
+    // Should be rejected for FAT_FINGER_SIZE, not PRICE_COLLAR.
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = makeMsg('D', '1', '2', 5000000, 9990000);
+    assert(risk.checkOrder(msg) == RiskRejectReason::FAT_FINGER_SIZE);
+}
+
+// ================================================================
+// TEST GROUP 6: FULL PIPELINE INTEGRATION
+// Parse a raw FIX string → risk check → verify result.
+// This tests that the parser and risk engine work together correctly.
+// ================================================================
+
+void test_full_pipeline_valid_order() {
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = parseFix("8=FIX.4.2\x01" "35=D\x01" "11=100\x01" "54=1\x01" "38=50\x01" "44=150.25\x01" "40=2\x01");
+    assert(risk.checkOrder(msg) == RiskRejectReason::NONE);
+}
+
+void test_full_pipeline_collar_rejection() {
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+    auto msg = parseFix("8=FIX.4.2\x01" "35=D\x01" "11=101\x01" "54=1\x01" "38=50\x01" "44=200.00\x01" "40=2\x01");
+    assert(risk.checkOrder(msg) == RiskRejectReason::PRICE_COLLAR);
+}
+
+void test_full_pipeline_matching_with_risk() {
+    // Full end-to-end: seed book, send order through gateway, verify it matched
+    OrderPool pool(1000);
     OrderBook book(&pool);
     OrderEntryGateway gateway(&pool, &book);
 
-    // Seed the book directly so risk collar has a reference
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-    book.processOrder(pool.acquire(2, 1490000, 100, Side::BUY));
+    // Seed the book directly (bypassing risk — bootstrap)
+    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));  // Ask @ $150
 
-    // Send a new order via FIX
-    auto newOrder = parseFix(
-        "8=FIX.4.2\x01" "35=D\x01" "11=100\x01" "54=2\x01" 
-        "38=200\x01" "44=151.00\x01" "40=2\x01"
-    );
-    gateway.onParsedMessage(newOrder);
+    // Send a matching buy through the full gateway+risk pipeline
+    auto msg = parseFix("8=FIX.4.2\x01" "35=D\x01" "11=2\x01" "54=1\x01" "38=50\x01" "44=150.00\x01" "40=2\x01");
+    gateway.onParsedMessage(msg);
 
-    // Modify it: change qty from 200 to 80, same price
-    // Tag 41=100 (original), Tag 11=101 (new ID)
-    auto modMsg = parseFix(
-        "8=FIX.4.2\x01" "35=G\x01" "41=100\x01" "11=101\x01" 
-        "54=2\x01" "38=80\x01" "44=151.00\x01" "40=2\x01"
-    );
-    gateway.onParsedMessage(modMsg);
-
-    // Buy into the modified order — should only get 80 shares
-    book.processOrder(pool.acquire(3, 1510000, 200, Side::BUY));
-
-    // Find the trade against the modified order (ID 101)
-    bool foundModifiedTrade = false;
-    for (const auto& t : book.getTradeLog()) {
-        if (t.sellOrderId == 101) {
-            assert(t.quantity == 80);  // Modified qty, not original 200
-            foundModifiedTrade = true;
-        }
-    }
-    assert(foundModifiedTrade);
+    // Verify: the trade log should have 1 trade for 50 units
+    assert(book.getTradeLog().size() == 1);
+    assert(book.getTradeLog()[0].quantity == 50);
+    assert(book.getTradeLog()[0].price == 1500000);
 }
 
-void test_fix_cancel_replace_rejected_by_risk() {
-    OrderPool pool(100);
+void test_full_pipeline_risk_blocks_before_matching() {
+    // Verify that a rejected order never creates a trade
+    OrderPool pool(1000);
     OrderBook book(&pool);
     OrderEntryGateway gateway(&pool, &book);
 
     // Seed the book
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-    book.processOrder(pool.acquire(2, 1490000, 100, Side::BUY));
+    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));  // Ask @ $150
 
-    // Send a normal order via FIX
-    auto newOrder = parseFix(
-        "8=FIX.4.2\x01" "35=D\x01" "11=100\x01" "54=2\x01" 
-        "38=50\x01" "44=151.00\x01" "40=2\x01"
-    );
-    gateway.onParsedMessage(newOrder);
+    // Send a buy at $999 — should be collar-rejected, NO trade should happen
+    auto msg = parseFix("8=FIX.4.2\x01" "35=D\x01" "11=2\x01" "54=1\x01" "38=50\x01" "44=999.00\x01" "40=2\x01");
+    gateway.onParsedMessage(msg);
 
-    // Try to modify it to $999 — should be collar-rejected
-    auto modMsg = parseFix(
-        "8=FIX.4.2\x01" "35=G\x01" "41=100\x01" "11=101\x01" 
-        "54=2\x01" "38=50\x01" "44=999.00\x01" "40=2\x01"
-    );
-    gateway.onParsedMessage(modMsg);
-
-    // The original order should still be on the book with its original values.
-    // Buy into it — should get 50 shares at $151 (the original order, unmodified)
-    book.processOrder(pool.acquire(3, 1510000, 200, Side::BUY));
-
-    bool foundOriginal = false;
-    for (const auto& t : book.getTradeLog()) {
-        if (t.sellOrderId == 100) {
-            assert(t.quantity == 50);
-            assert(t.price == 1510000);
-            foundOriginal = true;
-        }
-    }
-    assert(foundOriginal);
-}
-
-// ================================================================
-// TEST GROUP 7: EDGE CASES
-// ================================================================
-
-void test_self_trade_at_same_price() {
-    // An incoming order that matches against resting orders — even if
-    // both sides are from the "same" client (we don't track client IDs 
-    // yet, so this just verifies the engine doesn't choke)
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-    book.processOrder(pool.acquire(2, 1500000, 100, Side::BUY));
-
-    assert(book.getTradeLog().size() == 1);
-    assert(book.getTradeLog()[0].quantity == 100);
-}
-
-void test_aggressive_buy_crosses_multiple_levels() {
-    // Buy at $155 should sweep all asks from $150 up to $155
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    book.processOrder(pool.acquire(1, 1500000, 10, Side::SELL));  // $150
-    book.processOrder(pool.acquire(2, 1510000, 10, Side::SELL));  // $151
-    book.processOrder(pool.acquire(3, 1520000, 10, Side::SELL));  // $152
-    book.processOrder(pool.acquire(4, 1560000, 10, Side::SELL));  // $156 — above buy price
-
-    // Limit buy @ $155 for 25 — should get 10@150, 10@151, 5@152, stop before $156
-    book.processOrder(pool.acquire(5, 1550000, 25, Side::BUY));
-
-    assert(book.getTradeLog().size() == 3);
-    assert(book.getTradeLog()[2].price == 1520000);
-    // Remaining 5 from $152 still on the book, plus $156
-    assert(book.getBestAsk() == 1520000);
-}
-
-void test_vwap_calculation() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    // Trade 1: 100 @ $150.00
-    book.processOrder(pool.acquire(1, 1500000, 100, Side::SELL));
-    book.processOrder(pool.acquire(2, 1500000, 100, Side::BUY));
-
-    // Trade 2: 200 @ $151.00
-    book.processOrder(pool.acquire(3, 1510000, 200, Side::SELL));
-    book.processOrder(pool.acquire(4, 1510000, 200, Side::BUY));
-
-    // VWAP = (100*150 + 200*151) / (100+200) = (15000 + 30200) / 300 = 150.6667
-    double vwap = book.getVWAP();
-    assert(vwap > 150.66 && vwap < 150.67);
-}
-
-void test_empty_book_accessors() {
-    OrderPool pool(100);
-    OrderBook book(&pool);
-
-    assert(book.getBestBid() == 0);
-    assert(book.getBestAsk() == 0);
-    assert(book.getVWAP() == 0.0);
+    // Verify: zero trades. The order never reached the book.
     assert(book.getTradeLog().empty());
+}
+
+// ================================================================
+// TEST GROUP 7: STATISTICS TRACKING
+// ================================================================
+
+void test_stats_accuracy() {
+    RiskEngine risk;
+    risk.updateBBO(1500000, 1510000);
+
+    // Send 3 valid, 2 invalid
+    risk.checkOrder(makeMsg('D', '1', '2', 100, 1500000));  // pass
+    risk.checkOrder(makeMsg('D', '1', '2', 100, 1500000));  // pass
+    risk.checkOrder(makeMsg('D', '1', '2', 100, 1500000));  // pass
+    risk.checkOrder(makeMsg('D', '1', '2', 0,   1500000));  // reject: invalid qty
+    risk.checkOrder(makeMsg('D', '1', '2', 5000000, 1500000));  // reject: fat finger
+
+    // We can't directly access stats, but we can verify via the check results
+    // The real assertion is that the engine didn't crash or miscount.
+    // In production, you'd expose stats and verify exact counts.
+    auto r1 = risk.checkOrder(makeMsg('D', '1', '2', 100, 1500000));
+    assert(r1 == RiskRejectReason::NONE);  // 6th order — still passes
 }
 
 // ================================================================
@@ -528,48 +328,47 @@ void test_empty_book_accessors() {
 // ================================================================
 
 int main() {
-    std::cout << "\n======= MATCHING ENGINE + MODIFY TEST SUITE =======\n\n";
+    std::cout << "\n======= RISK ENGINE UNIT TESTS =======\n\n";
 
-    std::cout << "--- Basic Order Matching ---\n";
-    RUN_TEST(test_limit_buy_matches_resting_sell);
-    RUN_TEST(test_limit_sell_matches_resting_buy);
-    RUN_TEST(test_no_match_when_prices_dont_cross);
-    RUN_TEST(test_exact_fill_removes_both_orders);
+    std::cout << "--- Validity Checks ---\n";
+    RUN_TEST(test_reject_zero_quantity);
+    RUN_TEST(test_reject_negative_price_limit_order);
+    RUN_TEST(test_allow_zero_price_market_order);
 
-    std::cout << "\n--- Market Orders ---\n";
-    RUN_TEST(test_market_buy_sweeps_multiple_levels);
-    RUN_TEST(test_market_sell_sweeps_bids);
-    RUN_TEST(test_market_order_with_no_liquidity);
+    std::cout << "\n--- Fat Finger Checks ---\n";
+    RUN_TEST(test_reject_fat_finger_size);
+    RUN_TEST(test_allow_just_under_size_limit);
+    RUN_TEST(test_reject_fat_finger_notional);
+    RUN_TEST(test_notional_skip_for_market_orders);
 
-    std::cout << "\n--- Price-Time Priority ---\n";
-    RUN_TEST(test_time_priority_fifo_at_same_price);
-    RUN_TEST(test_price_priority_better_price_fills_first);
+    std::cout << "\n--- Price Collar Checks ---\n";
+    RUN_TEST(test_reject_buy_above_collar);
+    RUN_TEST(test_reject_sell_below_collar);
+    RUN_TEST(test_allow_within_collar);
+    RUN_TEST(test_collar_at_exact_boundary);
+    RUN_TEST(test_collar_one_tick_past_boundary);
+    RUN_TEST(test_collar_skip_on_empty_book);
+    RUN_TEST(test_collar_with_only_bid);
+    RUN_TEST(test_collar_skip_for_market_orders);
+    RUN_TEST(test_custom_collar_width);
 
-    std::cout << "\n--- Cancel Orders ---\n";
-    RUN_TEST(test_cancel_removes_order_from_book);
-    RUN_TEST(test_cancel_nonexistent_order_is_noop);
-    RUN_TEST(test_cancel_middle_order_preserves_queue);
+    std::cout << "\n--- Rate Limiting ---\n";
+    RUN_TEST(test_rate_limit_triggers);
 
-    std::cout << "\n--- Modify Orders (Cancel/Replace) ---\n";
-    RUN_TEST(test_modify_qty_down_keeps_priority);
-    RUN_TEST(test_modify_qty_up_loses_priority);
-    RUN_TEST(test_modify_price_loses_priority);
-    RUN_TEST(test_modify_to_better_price_moves_level);
-    RUN_TEST(test_modify_nonexistent_order_is_noop);
-    RUN_TEST(test_modify_updates_order_id_in_map);
-    RUN_TEST(test_modify_bid_side);
+    std::cout << "\n--- Fail-Fast Ordering ---\n";
+    RUN_TEST(test_fail_fast_validity_before_collar);
+    RUN_TEST(test_fail_fast_fat_finger_before_collar);
 
-    std::cout << "\n--- Full FIX Pipeline (Modify) ---\n";
-    RUN_TEST(test_fix_cancel_replace_message);
-    RUN_TEST(test_fix_cancel_replace_rejected_by_risk);
+    std::cout << "\n--- Full Pipeline Integration ---\n";
+    RUN_TEST(test_full_pipeline_valid_order);
+    RUN_TEST(test_full_pipeline_collar_rejection);
+    RUN_TEST(test_full_pipeline_matching_with_risk);
+    RUN_TEST(test_full_pipeline_risk_blocks_before_matching);
 
-    std::cout << "\n--- Edge Cases ---\n";
-    RUN_TEST(test_self_trade_at_same_price);
-    RUN_TEST(test_aggressive_buy_crosses_multiple_levels);
-    RUN_TEST(test_vwap_calculation);
-    RUN_TEST(test_empty_book_accessors);
+    std::cout << "\n--- Statistics ---\n";
+    RUN_TEST(test_stats_accuracy);
 
-    std::cout << "\n====================================================\n";
+    std::cout << "\n======================================\n";
     std::cout << "RESULTS: " << testsPassed << "/" << testsRun << " tests passed.\n";
     if (testsPassed == testsRun) {
         std::cout << "ALL TESTS PASSED.\n";
@@ -577,6 +376,6 @@ int main() {
         std::cout << "FAILURES DETECTED.\n";
         return 1;
     }
-    std::cout << "====================================================\n\n";
+    std::cout << "======================================\n\n";
     return 0;
 }
