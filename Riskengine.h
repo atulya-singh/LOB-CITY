@@ -29,3 +29,43 @@ inline const char* rejectReasonToString(RiskRejectReason r) {
         default:                                   return "UNKNOWN";
     }
 }
+
+struct RiskConfg{
+    //fat finger checks
+    Quantity maxOrderQty = 1000000; // Max shares per single order
+    int64_t maxNotional = 100000000000LL; // Max price * qty (in fixed point units)
+
+    //price collar
+    int64_t collarBps = 500;
+
+    //rate limiting 
+    u_int32_t maxMsgsPerWindow = 5000;
+    u_int64_t windowDurationNs = 1000000000ULL; // 1 second in nanoseconds
+};
+
+//RISK STATISTICS
+// Tracks how many orders were checked, passed and rejected by category.
+// This is what you'd show on a monitoring dashboard in production.
+// ================================================================
+struct RiskStats {
+    uint64_t totalChecked     = 0;
+    uint64_t totalPassed      = 0;
+    uint64_t rejectInvalidPx  = 0;
+    uint64_t rejectInvalidQty = 0;
+    uint64_t rejectFatFinger  = 0;
+    uint64_t rejectNotional   = 0;
+    uint64_t rejectCollar     = 0;
+    uint64_t rejectRateLimit  = 0;
+ 
+    void recordReject(RiskRejectReason reason) {
+        switch (reason) {
+            case RiskRejectReason::INVALID_PRICE:      rejectInvalidPx++;  break;
+            case RiskRejectReason::INVALID_QUANTITY:    rejectInvalidQty++; break;
+            case RiskRejectReason::FAT_FINGER_SIZE:    rejectFatFinger++;  break;
+            case RiskRejectReason::FAT_FINGER_NOTIONAL:rejectNotional++;   break;
+            case RiskRejectReason::PRICE_COLLAR:       rejectCollar++;     break;
+            case RiskRejectReason::RATE_LIMIT:         rejectRateLimit++;  break;
+            default: break;
+        }
+    }
+};
