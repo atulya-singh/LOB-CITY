@@ -33,6 +33,7 @@ public:
 
     void cancelOrder(OrderId id);
     void processOrder(Order* order);
+    void modifyOrder(OrderId id, OrderId newId, Price newPrice, Quantity newQty);
     void display();
     double getVWAP() const;
     const std::vector<Trade>& getTradeLog() const { return tradeLog; }
