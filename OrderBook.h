@@ -39,4 +39,10 @@ public:
     void printMarketStats() const;
 
     void printLatencyReport()const{latencyTracker.printReport();}
+
+     // --- BBO Accessors for Risk Engine ---
+    // These let the OrderEntryGateway read the current top-of-book 
+    // to feed into the RiskEngine's price collar checks.
+    Price getBestBid() const { return bids.empty() ? 0 : bids.begin()->first; }
+    Price getBestAsk() const { return asks.empty() ? 0 : asks.begin()->first; }
 };
