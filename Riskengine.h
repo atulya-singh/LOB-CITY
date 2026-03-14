@@ -125,4 +125,64 @@ class RiskEngine {
 
 
 
+        //CHECK 4 : PRICE COLLAR 
+        //Prevents orders from executing at prices far from the current market
+        //cancels orders outside the band of the midpoint
+        //midpoingt : (bestBid + bestAsk)/2
+       inline RiskRejectReason checkPriceCollar(const ParsedFixMessage& msg) const {
+        if (msg.ordType == '1') return RiskRejectReason::NONE; // Market orders have no price
+        
+        // Calculate the reference price from current BBO
+        Price refPrice = 0;
+        if (bestBid > 0 && bestAsk > 0) {
+            refPrice = (bestBid + bestAsk) / 2;    // Midpoint
+        } else if (bestBid > 0) {
+            refPrice = bestBid;                      // Only bids on the book
+        } else if (bestAsk > 0) {
+            refPrice = bestAsk;                      // Only asks on the book
+        } else {
+            return RiskRejectReason::NONE;           // Empty book — no reference, allow order
+        }
+ 
+        // Calculate maximum allowed deviation
+        // refPrice is in fixed-point (e.g., $150.00 = 1500000)
+        // collarBps is in basis points (e.g., 500 = 5%)
+        // maxDeviation = refPrice * 500 / 10000 = refPrice * 0.05
+        Price maxDeviation = refPrice * config.collarBps / 10000;
+ 
+        // Absolute deviation of the order price from the reference
+        Price deviation = msg.price > refPrice 
+                        ? (msg.price - refPrice) 
+                        : (refPrice - msg.price);
+ 
+        if (deviation > maxDeviation) {
+            return RiskRejectReason::PRICE_COLLAR;
+        }
+        return RiskRejectReason::NONE;
+    }
+
+
+    //CHECK 5 : Rate limitng 
+    //Prevents a single client from flooding the engine
+    inline RiskRejectReason checkRateLimit() {
+        uint64_t nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::high_resolution_clock::now().time_since_epoch()
+        ).count();
+ 
+        // If we've moved past the current window, start a new one
+        if (nowNs - windowStartNs >= config.windowDurationNs) {
+            windowStartNs = nowNs;
+            windowMsgCount = 0;
+        }
+ 
+        windowMsgCount++;
+ 
+        if (windowMsgCount > config.maxMsgsPerWindow) {
+            return RiskRejectReason::RATE_LIMIT;
+        }
+        return RiskRejectReason::NONE;
+    }
+
+
+
 };
