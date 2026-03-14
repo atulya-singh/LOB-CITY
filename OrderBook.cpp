@@ -138,6 +138,103 @@ void OrderBook::cancelOrder(OrderId id) {
     publishBBO();
 }
 
+// ================================================================
+// ORDER MODIFY (Cancel/Replace)
+//
+// FIX MsgType 'G' — Order Cancel/Replace Request
+//
+// This is how real exchanges handle order modifications. The rules
+// around time priority are critical and differ between exchanges:
+//
+// CASE 1: Only quantity decreases (price unchanged)
+//   → The order KEEPS its time priority position.
+//   → Rationale: reducing size reduces risk. Punishing the trader
+//     by sending them to the back of the queue would discourage
+//     risk-reducing behavior.
+//
+// CASE 2: Price changes OR quantity increases
+//   → The order LOSES time priority — treated as cancel + new order.
+//   → Rationale: improving your price (making it more aggressive)
+//     or increasing size is equivalent to a new order. You shouldn't
+//     be able to sit at the front of the queue, then suddenly change
+//     your price to jump ahead at a better level.
+//
+// This matches the behavior of most major exchanges (Nasdaq, NYSE, CME).
+// ================================================================
+void OrderBook::modifyOrder(OrderId origId, OrderId newId, Price newPrice, Quantity newQty) {
+    // Step 1: Find the original order
+    auto it = orderMap.find(origId);
+    if (it == orderMap.end()) return;  // Order doesn't exist — silently reject
+
+    Order* order = it->second;
+    Price oldPrice = order->price;
+    Quantity oldQty = order->quantity;
+
+    // Snapshot BBO before modification
+    Price bidBefore = bids.empty() ? 0 : bids.begin()->first;
+    Price askBefore = asks.empty() ? 0 : asks.begin()->first;
+
+    // ============================================================
+    // CASE 1: Price unchanged, quantity decreased → keep priority
+    // ============================================================
+    if (newPrice == oldPrice && newQty < oldQty) {
+        // Just update the quantity in place. The order stays exactly
+        // where it is in the linked list — same position, same priority.
+        Quantity qtyReduction = oldQty - newQty;
+
+        order->quantity = newQty;
+        order->id = newId;
+
+        // Update the price level's total volume
+        if (order->side == Side::BUY) {
+            bids[order->price].totalVolume -= qtyReduction;
+        } else {
+            asks[order->price].totalVolume -= qtyReduction;
+        }
+
+        // Update the order map: remove old ID, insert new ID
+        orderMap.erase(it);
+        orderMap[newId] = order;
+    }
+    // ============================================================
+    // CASE 2: Price changed or quantity increased → lose priority
+    // This is implemented as atomic cancel + re-insert.
+    // "Atomic" means no other order can sneak in between the
+    // cancel and the re-insert — it happens in one function call
+    // with no opportunity for interleaving.
+    // ============================================================
+    else {
+        Side side = order->side;
+
+        // Remove from the old position
+        orderMap.erase(it);
+        if (side == Side::BUY) {
+            bids[oldPrice].removeOrder(order);
+            if (bids[oldPrice].head == nullptr) bids.erase(oldPrice);
+        } else {
+            asks[oldPrice].removeOrder(order);
+            if (asks[oldPrice].head == nullptr) asks.erase(oldPrice);
+        }
+
+        // Rewrite the order's fields in place (no pool release/acquire needed)
+        order->id = newId;
+        order->price = newPrice;
+        order->quantity = newQty;
+        order->next = nullptr;
+        order->prev = nullptr;
+
+        // Re-insert at the new price level (goes to the BACK of the queue)
+        addOrder(order);
+    }
+
+    // Publish BBO if the top of book changed
+    Price bidAfter = bids.empty() ? 0 : bids.begin()->first;
+    Price askAfter = asks.empty() ? 0 : asks.begin()->first;
+    if (bidBefore != bidAfter || askBefore != askAfter) {
+        publishBBO();
+    }
+}
+
 void OrderBook::display() {
     std::cout << "\n========== ORDER BOOK (Top 5) ==========\n";
     std::cout << std::setw(12) << "ASK QTY"
