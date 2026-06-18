@@ -1,0 +1,30 @@
+# ---- Build artifacts ----
+*.o
+*.obj
+*.out
+*.exe
+*.app
+build/
+cmake-build-*/
+
+# Compiled executables (no extension, Mach-O/ELF)
+hft_engine
+hft_bench
+hft_test
+lob_server
+lob_benchmark
+lob_test
+matching_engine
+test_engine
+test_risk
+simulator
+
+# ---- Python ----
+.venv/
+__pycache__/
+*.pyc
+
+# ---- Editor / OS ----
+.DS_Store
+.vscode/
+.idea/
