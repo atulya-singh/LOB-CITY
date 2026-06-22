@@ -5,9 +5,9 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
-#include "types.h"
-#include "MemoryPool.h"
-#include "OrderBook.h"
+#include "../core/types.h"
+#include "../core/MemoryPool.h"
+#include "../core/OrderBook.h"
 
 // ================================================================
 // MARKET MAKER CONFIGURATION

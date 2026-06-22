@@ -1,12 +1,12 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
-#include "types.h"
-#include "MemoryPool.h"
-#include "OrderBook.h"
-#include "OrderEntryGateway.h"
-#include "FixParser.h"
-#include "RiskEngine.h"
+#include "../src/core/types.h"
+#include "../src/core/MemoryPool.h"
+#include "../src/core/OrderBook.h"
+#include "../src/gateway/OrderEntryGateway.h"
+#include "../src/gateway/FixParser.h"
+#include "../src/risk/Riskengine.h"
 
 // ================================================================
 // TEST FRAMEWORK

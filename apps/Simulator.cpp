@@ -3,10 +3,10 @@
 #include <cmath>
 #include <random>
 #include <iomanip>
-#include "types.h"
-#include "MemoryPool.h"
-#include "OrderBook.h"
-#include "Marketmaker.h"
+#include "../src/core/types.h"
+#include "../src/core/MemoryPool.h"
+#include "../src/core/OrderBook.h"
+#include "../src/strategy/Marketmaker.h"
 
 // ================================================================
 // ORDER FLOW SIMULATOR

@@ -1,11 +1,11 @@
 #include <iostream>
 #include <cassert>
 #include <cstring>
-#include "Riskengine.h"
-#include "FixParser.h"
-#include "MemoryPool.h"
-#include "OrderBook.h"
-#include "OrderEntryGateway.h"
+#include "../src/risk/Riskengine.h"
+#include "../src/gateway/FixParser.h"
+#include "../src/core/MemoryPool.h"
+#include "../src/core/OrderBook.h"
+#include "../src/gateway/OrderEntryGateway.h"
 
 // ================================================================
 // UNIT TEST FRAMEWORK (minimal, zero-dependency)

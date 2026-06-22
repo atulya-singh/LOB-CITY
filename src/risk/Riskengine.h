@@ -3,8 +3,8 @@
 #include <chrono>
 #include <iostream>
 #include <iomanip>
-#include "types.h"
-#include "FixParser.h"
+#include "../core/types.h"
+#include "../gateway/FixParser.h"
 
 enum class RiskRejectReason : uint8_t{
     NONE = 0, //ORDER PASSED All checks
