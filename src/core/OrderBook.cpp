@@ -7,7 +7,7 @@
 #include <chrono>
 #include <iomanip>
 
-RingBufferBBO buffer;
+extern RingBufferBBO buffer;
 // #define ENABLE_LOGGING 
 void OrderBook::recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty){
     auto now = std::chrono::high_resolution_clock::now();

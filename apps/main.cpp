@@ -5,9 +5,10 @@
 #include "../src/core/MemoryPool.h"
 #include "../src/gateway/FixParser.h"
 #include "../src/gateway/OrderEntryGateway.h"
-#include "../src/core/RingBuffer.h" // <-- The Lock-Free Queue
+#include "../src/core/RingBuffer.h" 
 #include "../src/marketdata/UdpPublisher.h"
 #include "../src/core/LatencyTracker.h"
+#include "../src/marketdata/RingBufferBBO.h"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -18,10 +19,9 @@
 
 // ==========================================
 // THE LOCK-FREE SPSC QUEUE
-// Capacity must be a power of 2 for maximum compiler optimization
 // ==========================================
 RingBuffer<ParsedFixMessage, 131072> orderQueue;
-
+RingBufferBBO buffer;
 // ==========================================
 // THREAD 2: THE CONSUMER (MATCHING ENGINE)
 // ==========================================
@@ -29,18 +29,27 @@ void runMatchingEngine(OrderEntryGateway& gateway) {
     std::cout << ">>> [Engine Core] Thread active. Polling lock-free queue...\n";
     ParsedFixMessage msg;
     
-    // HFT Concept: The "Busy-Wait" Loop
-    // This thread never sleeps. It spins at 100% CPU waiting for data to achieve ultra-low latency.
+    
     while (true) {
         if (orderQueue.pop(msg)) {
             gateway.onParsedMessage(msg);
         }
     }
 }
-
+// Thread 3 for BBO 
+void DisplayBBO(UdpPublisher& udp){
+    
+    while (true){
+        auto result = buffer.pop();
+        if(result) {
+            BboMessage msg = *result;
+            
+            publishBbo(msg);
+        }
+    }
+}
 // ==========================================
 // THREAD 1: THE PRODUCER (NETWORK I/O)
-// Note: We removed the 'gateway' parameter because this thread no longer touches the engine directly.
 // ==========================================
 void runTCPServer() {
     int server_fd, new_socket;
@@ -71,11 +80,11 @@ void runTCPServer() {
 
         std::string accumulator;
         accumulator.reserve(65536);
-        char readBuf[4096];          // ✅ only one buffer now
+        char readBuf[4096];          
 
         ParsedFixMessage parsedMsg;
         while (true) {
-            ssize_t valread = read(new_socket, readBuf, sizeof(readBuf));  // ✅ read into readBuf
+            ssize_t valread = read(new_socket, readBuf, sizeof(readBuf));  
 
             if (valread <= 0) {
                 std::cout << "[-] Client disconnected.\n\n";
@@ -83,7 +92,7 @@ void runTCPServer() {
                 break;
             }
 
-            accumulator.append(readBuf, valread);  // ✅ append readBuf
+            accumulator.append(readBuf, valread);  
 
             while (true) {
                 size_t msgEnd = accumulator.find("10=");
@@ -94,13 +103,13 @@ void runTCPServer() {
 
                 size_t msgLen = delimPos + 1;
 
-                if (parseFixMessage(accumulator.c_str(), msgLen, parsedMsg)) {  // ✅ parse accumulator
+                if (parseFixMessage(accumulator.c_str(), msgLen, parsedMsg)) {  
                     while (!orderQueue.push(parsedMsg)) {}
                 }
-                accumulator.erase(0, msgLen);  // remove processed message
-            }   // ← closes inner while(true)
-        }       // ← closes middle while(true) — the read loop
-    }           // ← closes outer while(true) — the accept loop
+                accumulator.erase(0, msgLen);  
+            }  
+        }       
+    }           
 }
 
 int main() {
@@ -126,6 +135,7 @@ int main() {
 
     // --- START MULTI-THREADING ---
     // Spin up Thread 2 (The Matching Engine) in the background
+    std::thread thirdThread(DisplayBBO);
     std::thread engineThread(runMatchingEngine, std::ref(gateway));
 
     // Keep Thread 1 (Network) running on the main execution path
