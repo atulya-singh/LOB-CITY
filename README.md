@@ -2,7 +2,7 @@
 
 A multi-threaded exchange emulator in C++ with a matching engine, pre-trade risk controls, and a market-making strategy with inventory risk management. Built following modern HFT systems design principles — zero heap allocations on the critical path, lock-free inter-thread communication, and sub-microsecond matching latency.
 
-~2,200 lines of C++ across 15 source files, plus 49 automated tests and Python tooling for load testing, market data, and PnL visualization.
+The C++ engine is organized into domain modules (`core`, `gateway`, `risk`, `marketdata`, `strategy`), with runnable apps, unit-test suites, and Python tooling for load testing, market data, and PnL visualization.
 
 ## Architecture
 
@@ -118,7 +118,7 @@ The simulator generates realistic synthetic order flow: prices follow a random w
 | PnL per Fill | $6.54 |
 | Max Position | ±500 shares |
 
-![Market Maker Backtest](pnl_curve_report.png)
+![Market Maker Backtest](docs/pnl_curve_report.png)
 
 ## Test Suites
 
@@ -130,57 +130,76 @@ The simulator generates realistic synthetic order flow: prices follow a random w
 
 ## Build and Run
 
+All commands are run from the repository root. The shared engine sources live under `src/`, runnable apps under `apps/`, and unit tests under `tests/`.
+
 **Exchange server:**
 ```bash
-g++ -O3 -std=c++17 -march=native -pthread main.cpp FixParser.cpp OrderBook.cpp -o lob_server
+g++ -O3 -std=c++17 -march=native -pthread \
+    apps/main.cpp apps/tests.cpp \
+    src/gateway/FixParser.cpp src/core/OrderBook.cpp -o lob_server
 ./lob_server
 ```
 
 **Market data listener** (separate terminal):
 ```bash
-python3 market_data_listener.py
+python3 scripts/market_data_listener.py
 ```
 
 **Load injector** (separate terminal — sends 100K FIX orders over TCP):
 ```bash
-python3 replayer.py
+python3 scripts/replayer.py
 ```
 
 **Market maker backtest:**
 ```bash
-g++ -O3 -std=c++17 -march=native -pthread Simulator.cpp FixParser.cpp OrderBook.cpp -o simulator
+g++ -O3 -std=c++17 -march=native -pthread \
+    apps/Simulator.cpp src/gateway/FixParser.cpp src/core/OrderBook.cpp -o simulator
 ./simulator
-python3 plot_backtest.py    # generates pnl_curve_report.png
+python3 scripts/plot_backtest.py    # generates docs/pnl_curve_report.png
 ```
 
 **Test suites:**
 ```bash
-g++ -O3 -std=c++17 -pthread test_risk_engine.cpp FixParser.cpp OrderBook.cpp -o test_risk
-g++ -O3 -std=c++17 -pthread test_matching_engine.cpp FixParser.cpp OrderBook.cpp -o test_engine
+g++ -O3 -std=c++17 -pthread \
+    tests/test_risk_engine.cpp src/gateway/FixParser.cpp src/core/OrderBook.cpp -o test_risk
+g++ -O3 -std=c++17 -pthread \
+    tests/test_matching_engine.cpp src/gateway/FixParser.cpp src/core/OrderBook.cpp -o test_engine
 ./test_risk && ./test_engine
 ```
 
 ## File Structure
 
 ```
-├── types.h                    Core types: Order, PriceLevel, Trade, Side
-├── OrderBook.h / .cpp         Matching engine (price-time priority)
-├── MemoryPool.h               Pre-allocated object pool for Order structs
-├── RingBuffer.h               Lock-free SPSC queue (acquire/release atomics)
-├── FixParser.h / .cpp         Zero-allocation FIX 4.2 protocol parser
-├── OrderEntryGateway.h        Message routing + FIX-to-internal translation
-├── Riskengine.h               Pre-trade risk checks (5-stage pipeline)
-├── Marketmaker.h              Market-making strategy with inventory skew
-├── MarketData.h               Packed BBO struct for UDP wire format
-├── UdpPublisher.h             UDP multicast publisher
-├── LatencyTracker.h           Nanosecond percentile statistics
-├── main.cpp                   Server entry point + benchmarks
-├── Simulator.cpp              Backtest harness with synthetic order flow
-├── test_risk_engine.cpp       24 risk engine unit tests
-├── test_matching_engine.cpp   25 matching engine + modify tests
-├── replayer.py                TCP load injector (100K FIX messages)
-├── market_data_listener.py    UDP multicast BBO receiver
-└── plot_backtest.py           PnL curve visualization
+├── src/                              Shared engine library
+│   ├── core/
+│   │   ├── types.h                   Core types: Order, PriceLevel, Trade, Side
+│   │   ├── OrderBook.h / .cpp        Matching engine (price-time priority)
+│   │   ├── MemoryPool.h              Pre-allocated object pool for Order structs
+│   │   ├── RingBuffer.h             Lock-free SPSC queue (acquire/release atomics)
+│   │   └── LatencyTracker.h          Nanosecond percentile statistics
+│   ├── gateway/
+│   │   ├── FixParser.h / .cpp        Zero-allocation FIX 4.2 protocol parser
+│   │   └── OrderEntryGateway.h       Message routing + FIX-to-internal translation
+│   ├── risk/
+│   │   └── Riskengine.h              Pre-trade risk checks (5-stage pipeline)
+│   ├── marketdata/
+│   │   ├── MarketData.h              Packed BBO struct for UDP wire format
+│   │   └── UdpPublisher.h            UDP multicast publisher
+│   └── strategy/
+│       └── Marketmaker.h             Market-making strategy with inventory skew
+├── apps/                             Runnable entry points
+│   ├── main.cpp                      Exchange server (TCP gateway + threaded pipeline)
+│   ├── Simulator.cpp                 Backtest harness with synthetic order flow
+│   └── tests.h / tests.cpp           In-process functional + benchmark routines
+├── tests/                            Standalone unit-test suites
+│   ├── test_risk_engine.cpp          Risk engine + FIX pipeline tests
+│   └── test_matching_engine.cpp      Matching engine + cancel/replace tests
+├── scripts/                          Python tooling
+│   ├── replayer.py                   TCP load injector (100K FIX messages)
+│   ├── market_data_listener.py       UDP multicast BBO receiver
+│   └── plot_backtest.py              PnL curve visualization
+└── docs/
+    └── pnl_curve_report.png          Sample backtest equity curve
 ```
 
 ## Design Decisions
