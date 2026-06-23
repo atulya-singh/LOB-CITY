@@ -36,14 +36,19 @@ The system decouples network I/O from order processing using a lock-free SPSC ri
 
 ## Performance
 
-Benchmarked on Apple Silicon (macOS) without kernel-bypass networking.
+Benchmarked on Apple Silicon (macOS) with `-O3 -march=native`, without kernel-bypass networking.
 
 | Metric | Value | What It Measures |
 |:---|:---|:---|
-| Matching Latency (p50) | ~50 ns | Order book lookup + linked list traversal + trade recording |
-| Matching Latency (p99) | ~730 ns | Worst-case with cache misses and BBO publish |
-| Pipeline Latency | ~200 ns | Full path: FIX parse → risk check → pool acquire → match |
-| Throughput | >4M orders/sec | Sustained rate through the end-to-end pipeline |
+| Matching Latency (p50) | ~41 ns | Order book lookup + linked list traversal + trade recording |
+| Matching Latency (p95) | ~42 ns | Typical path with no top-of-book change |
+| Matching Latency (p99) | ~190 ns | Cache misses, new price-level allocation |
+| Matching Latency (p99.9) | ~10 µs | Tail dominated by the `sendto()` BBO publish in the critical path |
+| Pipeline Latency | ~64 ns | Full path: FIX parse → risk check → pool acquire → match |
+| Matching Throughput | ~13M orders/sec | Sustained rate through the matching engine |
+| Pipeline Throughput | ~15M msg/sec | End-to-end: FIX → risk → gateway → engine |
+
+The median path is sub-50 ns; the latency tail (p99.9 and above) is driven by the synchronous UDP market-data publish, which sits inside the timed critical path. Moving the BBO `sendto()` onto a dedicated publisher thread is the next planned optimization.
 
 ## Components
 
