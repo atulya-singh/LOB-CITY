@@ -7,7 +7,9 @@
 #include <chrono>
 #include <iomanip>
 
-extern RingBufferBBO buffer;
+// Defined here (the translation unit every executable links) so the server,
+// the test suites, and the simulator all share one BBO ring without needing main.cpp.
+RingBufferBBO buffer;
 // #define ENABLE_LOGGING 
 void OrderBook::recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty){
     auto now = std::chrono::high_resolution_clock::now();

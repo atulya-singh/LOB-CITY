@@ -33,7 +33,7 @@ public:
 
     }
 
-    inline std::optional<BboMessage> pop() const {
+    inline std::optional<BboMessage> pop(){
         
         size_t current_tail = tail.load(std::memory_order_relaxed);
         size_t current_head = head.load(std::memory_order_acquire);

@@ -21,7 +21,7 @@
 // THE LOCK-FREE SPSC QUEUE
 // ==========================================
 RingBuffer<ParsedFixMessage, 131072> orderQueue;
-RingBufferBBO buffer;
+extern RingBufferBBO buffer; // defined in OrderBook.cpp
 // ==========================================
 // THREAD 2: THE CONSUMER (MATCHING ENGINE)
 // ==========================================
@@ -44,7 +44,7 @@ void DisplayBBO(UdpPublisher& udp){
         if(result) {
             BboMessage msg = *result;
             
-            publishBbo(msg);
+            udp.publishBbo(msg);
         }
     }
 }
@@ -135,7 +135,7 @@ int main() {
 
     // --- START MULTI-THREADING ---
     // Spin up Thread 2 (The Matching Engine) in the background
-    std::thread thirdThread(DisplayBBO);
+    std::thread thirdThread(DisplayBBO, std::ref(udpPub));
     std::thread engineThread(runMatchingEngine, std::ref(gateway));
 
     // Keep Thread 1 (Network) running on the main execution path
