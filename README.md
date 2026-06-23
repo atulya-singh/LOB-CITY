@@ -1,38 +1,36 @@
 # Ultra-Low Latency Limit Order Book Engine
 
-A multi-threaded exchange emulator in C++ with a matching engine, pre-trade risk controls, and a market-making strategy with inventory risk management. Built following modern HFT systems design principles — zero heap allocations on the critical path, lock-free inter-thread communication, and sub-microsecond matching latency.
+A multi-threaded exchange emulator in C++ with a matching engine, pre-trade risk controls, and a market-making strategy with inventory risk management. Built on modern HFT systems principles — zero heap allocations on the critical path, lock-free inter-thread communication, no system calls on the matching thread, and a **~41 ns median / ~125 ns p99** matching latency.
 
-The C++ engine is organized into domain modules (`core`, `gateway`, `risk`, `marketdata`, `strategy`), with runnable apps, unit-test suites, and Python tooling for load testing, market data, and PnL visualization.
+The engine is organized into domain modules (`core`, `gateway`, `risk`, `marketdata`, `strategy`), with runnable apps, unit-test suites, and Python tooling for load testing, market data, and PnL visualization.
 
 ## Architecture
 
+Three busy-wait threads connected by lock-free SPSC ring buffers. The hot path — the matching thread — never makes a system call: order ingress and market-data egress are both offloaded to neighbouring threads through queues.
+
 ```
-                           ┌─────────────────────────────────────────────────┐
-                           │              THREAD 1: Network I/O              │
-  TCP Client               │                                                 │
-  (replayer.py)  ────────► │  TCP Socket ──► FIX Parser ──► Ring Buffer      │
-                           │                                  (Lock-Free     │
-                           │                                   SPSC Queue)   │
-                           └───────────────────────────┬─────────────────────┘
-                                                       │
-                                          push() with memory_order_release
-                                                       │
-                                                       ▼
-                           ┌─────────────────────────────────────────────────┐
-                           │           THREAD 2: Matching Engine             │
-                           │                                                 │
-                           │  Ring Buffer ──► Risk Engine ──► Memory Pool    │
-                           │                       │              │          │
-                           │                   reject?         acquire()     │
-                           │                   return;            │          │
-                           │                                      ▼          │
-  UDP Multicast            │                              Order Book         │
-  (market_data_    ◄────── │  UDP Publisher ◄── BBO ◄── (Price-Time          │
-   listener.py)            │                             Priority)           │
-                           └─────────────────────────────────────────────────┘
+  TCP Client              ┌──────────────────────────────────────────────────┐
+  (replayer.py) ──TCP───► │ THREAD 1 — Network I/O                            │
+                          │   recv() → FIX Parser → orderQueue.push()         │
+                          └─────────────────────┬────────────────────────────┘
+                                                │  orderQueue  (lock-free SPSC)
+                                                ▼
+                          ┌──────────────────────────────────────────────────┐
+                          │ THREAD 2 — Matching Engine  (the hot path)        │
+                          │   pop → Risk Engine → Memory Pool → Order Book     │
+                          │   (price-time priority)                            │
+                          │   on top-of-book change → bboQueue.push()          │
+                          │                          └─ no syscall, just a store│
+                          └─────────────────────┬────────────────────────────┘
+                                                │  bboQueue  (lock-free SPSC)
+                                                ▼
+  UDP Multicast           ┌──────────────────────────────────────────────────┐
+  (market_data_  ◄──UDP── │ THREAD 3 — Market Data Publisher                  │
+   listener.py)           │   pop → sendto()   ← the syscall lives here, alone │
+                          └──────────────────────────────────────────────────┘
 ```
 
-The system decouples network I/O from order processing using a lock-free SPSC ring buffer. The network thread reads TCP bytes, parses FIX messages, and pushes them into the queue. The engine thread busy-waits on the queue, runs pre-trade risk checks, and dispatches to the matching engine. BBO updates are broadcast over UDP multicast after every trade that changes the top of book.
+The network thread reads TCP bytes, parses FIX, and pushes to `orderQueue`. The matching thread busy-waits on it, runs pre-trade risk checks, and matches. When the top of book moves it pushes a BBO snapshot to `bboQueue` and immediately returns to matching — the `sendto()` UDP multicast is performed by a dedicated publisher thread, keeping the kernel boundary off the critical path entirely.
 
 ## Performance
 
@@ -40,102 +38,72 @@ Benchmarked on Apple Silicon (macOS) with `-O3 -march=native`, without kernel-by
 
 | Metric | Value | What It Measures |
 |:---|:---|:---|
-| Matching Latency (p50) | ~41 ns | Order book lookup + linked list traversal + trade recording |
-| Matching Latency (p95) | ~42 ns | Typical path with no top-of-book change |
-| Matching Latency (p99) | ~190 ns | Cache misses, new price-level allocation |
-| Matching Latency (p99.9) | ~10 µs | Tail dominated by the `sendto()` BBO publish in the critical path |
-| Pipeline Latency | ~64 ns | Full path: FIX parse → risk check → pool acquire → match |
-| Matching Throughput | ~13M orders/sec | Sustained rate through the matching engine |
-| Pipeline Throughput | ~15M msg/sec | End-to-end: FIX → risk → gateway → engine |
+| Matching Latency (p50) | **~41 ns** | Order book lookup + linked-list traversal + trade record |
+| Matching Latency (p99) | **~125 ns** | Cache misses, new price-level allocation |
+| Matching Latency (p99.9) | **~1.5 µs** | Worst-case tail (cross-core scheduling jitter) |
+| Pipeline Latency | ~65 ns | Full path: FIX parse → risk → pool acquire → match |
+| Matching Throughput | **~24M orders/sec** | Sustained rate through the matching engine |
+| Pipeline Throughput | ~14M msg/sec | End-to-end: FIX → risk → gateway → engine |
 
-The median path is sub-50 ns; the latency tail (p99.9 and above) is driven by the synchronous UDP market-data publish, which sits inside the timed critical path. Moving the BBO `sendto()` onto a dedicated publisher thread is the next planned optimization.
+**Tail-latency case study.** The market-data publish was originally a synchronous `sendto()` *inside* the timed matching path. Profiling showed a bimodal distribution: a 41 ns median (orders that didn't move the book) against a ~10 µs p99.9 and ~75 µs max (orders that did, and paid the kernel crossing). Moving the `sendto()` onto a dedicated publisher thread fed by a second lock-free ring **cut p99.9 from ~10 µs to ~1.5 µs, max from ~75 µs to ~2 µs, and nearly doubled throughput (13M → 24M orders/sec)** — with no change to the median, confirming the syscall was the sole tail driver.
+
+## Design Decisions
+
+**No system calls on the hot path** — the matching thread never calls into the kernel. Market data is handed to a publisher thread via a lock-free ring, so a blocking/preemptible `sendto()` can never stall order matching. This is the single biggest contributor to the collapsed latency tail (see case study above).
+
+**Lock-free SPSC ring buffers for all thread handoff** — `std::atomic` head/tail with acquire/release ordering, power-of-2 capacity (modulo compiles to a bitwise AND). No mutexes, no condition variables, no context switches between stages.
+
+**Busy-wait over condition variables** — each thread spins at 100% on its own core. Wake-up latency is bounded by cache-coherence propagation (~50 ns) rather than OS scheduler wake-up (~10,000 ns+). The classic latency-sensitive tradeoff: dedicate a core to polling for deterministic response.
+
+**Zero heap allocation on the critical path** — `Order` objects come from a pre-allocated pool (O(1) free-list acquire/release), aligned to 64-byte cache lines to prevent false sharing. No `new`/`delete` while matching.
+
+**Fixed-point integer prices** — prices are `int64_t` with 4 implied decimals ($150.00 = 1,500,000). Eliminates floating-point arithmetic and comparison error from the matching engine; price math is exact.
+
+**O(1) cancel and modify** — each price level is an intrusive doubly-linked list and every live order is indexed in a hash map, so any order is unlinked by ID in constant time. A `std::deque` would force an O(n) scan to remove from the middle.
+
+**Risk checks before pool allocation** — rejected orders never consume a pool slot or touch the book, so a flood of invalid orders can't exhaust memory or slow matching for valid flow.
 
 ## Components
 
-### Matching Engine — `OrderBook.cpp`, `types.h`
+**Matching Engine** — `core/OrderBook.{h,cpp}`, `core/types.h`
+`std::map` per side (bids descending, asks ascending); each price level is a doubly-linked list of pooled `Order` structs. **Price-time priority** (best price first, FIFO within a level). Supports limit, market (multi-level sweep), cancel, and cancel/replace. Cancel/replace keeps queue position on a same-price size *decrease*, loses it on a price change or size *increase* — standard exchange time-priority rules.
 
-The order book uses a `std::map<Price, PriceLevel>` for each side — bids sorted descending (highest first), asks sorted ascending (lowest first). Each `PriceLevel` contains a doubly-linked list of `Order` structs, giving O(1) insertion at the tail and O(1) removal from any position.
+**Pre-Trade Risk Engine** — `risk/Riskengine.h`
+Five fail-fast checks, cheapest first: validity → fat-finger size → fat-finger notional → 5% price collar → rate limit. Rejected orders never reach the pool or book. Tracks pass rate and rejection breakdown.
 
-Orders are matched using **price-time priority**: the best-priced resting order fills first, and among orders at the same price, the oldest fills first (FIFO). The engine supports limit orders, market orders (which sweep through price levels without a price constraint), cancellations, and cancel/replace modifications.
+**Lock-Free Ring Buffers** — `core/RingBuffer.h`, `marketdata/RingBufferBBO.h`
+SPSC queues with acquire/release atomics. One carries parsed orders (network → matcher), the other carries BBO snapshots (matcher → publisher). Power-of-2 capacity, no locks or syscalls.
 
-**Cancel/Replace** follows standard exchange rules for time priority:
-- Quantity decrease at the same price → keeps queue position (reducing risk shouldn't be punished)
-- Price change or quantity increase → loses queue position (treated as a new order)
+**Memory Pool** — `core/MemoryPool.h`
+200,000 `Order` objects pre-allocated at startup; O(1) `acquire()`/`release()` over a free list; 64-byte aligned. Zero allocation on the hot path.
 
-### Pre-Trade Risk Engine — `Riskengine.h`
+**FIX Protocol Parser** — `gateway/FixParser.{h,cpp}`
+Single-pass, zero-allocation FIX 4.2 parser. Tag=value pairs over SOH delimiters into a flat struct; fixed-point prices; order IDs held as `string_view` into the original buffer (no copies). Handles New Order (35=D), Cancel (35=F), Cancel/Replace (35=G).
 
-Every order passes through five checks before touching the book, ordered from cheapest to most expensive (fail-fast):
+**Market Data Feed** — `marketdata/UdpPublisher.h`, `marketdata/MarketData.h`
+Packed `BboMessage` (cache-line aligned, no padding) broadcast over UDP multicast (239.255.0.1:3050) from the publisher thread. Raw struct on the wire — no serialization.
 
-1. **Validity** (~1ns) — reject zero quantity or negative price on limit orders
-2. **Fat Finger Size** (~1ns) — reject orders above a configurable max quantity
-3. **Fat Finger Notional** (~2ns) — reject orders where price × quantity exceeds max dollar exposure
-4. **Price Collar** (~5ns) — reject orders whose price deviates more than 5% from the current market midpoint
-5. **Rate Limit** (~10ns) — reject when message count exceeds the per-window threshold
-
-Rejected orders never touch the memory pool or the order book. The risk engine maintains statistics (pass rate, rejection breakdown) for monitoring.
-
-### Lock-Free Ring Buffer — `RingBuffer.h`
-
-SPSC (Single-Producer, Single-Consumer) circular queue using `std::atomic` with acquire/release memory ordering. The producer (network thread) writes at `head`, the consumer (engine thread) reads at `tail`. No mutexes, no system calls, no context switches.
-
-Capacity is a power of 2 (131,072 slots) so the modulo operation compiles to a single bitwise AND. The consumer thread uses a busy-wait loop — 100% CPU utilization on one core, but wake-up latency is limited to cache coherence propagation time (~20-80ns) rather than OS scheduler latency (~5,000-50,000ns with condition variables).
-
-### Memory Pool — `MemoryPool.h`
-
-Pre-allocates 200,000 `Order` objects at startup. `acquire()` pops from a free list (O(1)), `release()` pushes back. No heap allocation or deallocation on the hot path. `Order` structs are aligned to 64-byte cache lines (`alignas(64)`) to prevent false sharing between CPU cores.
-
-### FIX Protocol Parser — `FixParser.h`, `FixParser.cpp`
-
-Single-pass, zero-allocation parser for FIX 4.2 messages. Walks the byte buffer character-by-character, identifies tag=value pairs separated by SOH delimiters, and writes results into a flat `ParsedFixMessage` struct. Prices are parsed into fixed-point integers (4 implied decimal places) to avoid floating-point arithmetic in the matching engine. Order IDs are stored as `string_view` (pointing into the original buffer) to avoid string copies.
-
-Supported message types: New Order Single (35=D), Cancel Request (35=F), Cancel/Replace Request (35=G).
-
-### Market Data Feed — `UdpPublisher.h`, `MarketData.h`
-
-BBO updates are sent as raw packed structs over UDP multicast (239.255.0.1:3050). The `BboMessage` struct uses `#pragma pack(push, 1)` to eliminate compiler padding, ensuring the byte layout matches between the C++ sender and the Python receiver. A single `sendto()` call transmits 33 bytes per update with no serialization overhead.
-
-### Market-Making Strategy — `Marketmaker.h`, `Simulator.cpp`
-
-An Avellaneda-Stoikov inspired market maker that quotes a bid and ask around the midpoint and manages inventory risk through three mechanisms:
-
-**Inventory Skew** — The core risk control. Both quotes shift proportionally to current inventory:
-```
-skew = netPosition × skewPerUnit
-bid  = midPrice - halfSpread - skew
-ask  = midPrice + halfSpread - skew
-```
-When long, quotes shift down (discouraging buys, encouraging sells). When short, quotes shift up. This creates a self-correcting feedback loop that pulls inventory back toward zero.
-
-**Position Limits** — Hard cap on maximum net exposure (default ±500 shares). When the limit is reached, the quote on the accumulating side is pulled entirely. Quote sizes are dynamically reduced as the position approaches the limit to prevent overshoot.
-
-**Kill Switch** — If total PnL (realized + unrealized) drops below a configurable threshold (default -$5,000), all quotes are immediately cancelled and the strategy stops trading.
-
-The simulator generates realistic synthetic order flow: prices follow a random walk, order sizes are exponentially distributed, and the tick-by-tick mix of limit orders (60%), market orders (15%), cancels (15%), and quiet ticks (10%) approximates real market microstructure.
+**Market-Making Strategy** — `strategy/Marketmaker.h`, `apps/Simulator.cpp`
+Avellaneda-Stoikov–inspired quoter with three inventory controls: **inventory skew** (both quotes shift with net position, a self-correcting pull toward flat), **position limits** (±500 share cap, size tapers near the limit), and a **kill switch** (cancels all quotes if PnL breaches a floor). The simulator drives it with synthetic order flow — random-walk prices, exponential sizes, and a realistic limit/market/cancel/quiet tick mix.
 
 **Sample Backtest (100,000 ticks):**
 
-| Metric | Value |
-|:---|:---|
-| Total Fills | 1,435 |
-| Total PnL | $9,379 |
-| Realized PnL | $7,737 |
-| Max Drawdown | $3,957 |
-| PnL per Fill | $6.54 |
-| Max Position | ±500 shares |
+| Total Fills | Total PnL | Realized PnL | Max Drawdown | PnL / Fill | Max Position |
+|:---|:---|:---|:---|:---|:---|
+| 1,435 | $9,379 | $7,737 | $3,957 | $6.54 | ±500 |
 
 ![Market Maker Backtest](docs/pnl_curve_report.png)
 
 ## Test Suites
 
-49 automated tests across two suites, covering the matching engine, risk engine, and full FIX pipeline integration.
+49 automated tests across two suites.
 
-**Risk Engine Tests** (24 tests) — validity checks, fat-finger rejection, price collar math (including exact boundary conditions), rate limiting, fail-fast ordering verification, and full pipeline integration (FIX parse → risk check → match → verify trade log).
-
-**Matching Engine Tests** (25 tests) — limit/market order matching, price-time priority (FIFO at same price, better price fills first), cancel correctness (including middle-of-queue removal), modify with priority preservation (qty-down keeps position, qty-up/price-change loses position), full FIX cancel/replace pipeline, and edge cases (empty book accessors, multi-level sweeps, VWAP calculation).
+- **Risk Engine (24)** — validity, fat-finger rejection, exact price-collar boundaries, rate limiting, fail-fast ordering, and full FIX-parse → risk → match → trade-log integration.
+- **Matching Engine (25)** — limit/market matching, price-time priority, cancel correctness (incl. middle-of-queue), modify with priority preservation, full FIX cancel/replace, and edge cases (empty book, multi-level sweeps, VWAP).
 
 ## Build and Run
 
-All commands are run from the repository root. The shared engine sources live under `src/`, runnable apps under `apps/`, and unit tests under `tests/`.
+Run from the repository root. Shared engine sources live in `src/`, apps in `apps/`, tests in `tests/`.
 
 **Exchange server:**
 ```bash
@@ -150,7 +118,7 @@ g++ -O3 -std=c++17 -march=native -pthread \
 python3 scripts/market_data_listener.py
 ```
 
-**Load injector** (separate terminal — sends 100K FIX orders over TCP):
+**Load injector** (separate terminal — 100K FIX orders over TCP):
 ```bash
 python3 scripts/replayer.py
 ```
@@ -180,7 +148,7 @@ g++ -O3 -std=c++17 -pthread \
 │   │   ├── types.h                   Core types: Order, PriceLevel, Trade, Side
 │   │   ├── OrderBook.h / .cpp        Matching engine (price-time priority)
 │   │   ├── MemoryPool.h              Pre-allocated object pool for Order structs
-│   │   ├── RingBuffer.h             Lock-free SPSC queue (acquire/release atomics)
+│   │   ├── RingBuffer.h              Lock-free SPSC queue — order ingress
 │   │   └── LatencyTracker.h          Nanosecond percentile statistics
 │   ├── gateway/
 │   │   ├── FixParser.h / .cpp        Zero-allocation FIX 4.2 protocol parser
@@ -189,11 +157,12 @@ g++ -O3 -std=c++17 -pthread \
 │   │   └── Riskengine.h              Pre-trade risk checks (5-stage pipeline)
 │   ├── marketdata/
 │   │   ├── MarketData.h              Packed BBO struct for UDP wire format
+│   │   ├── RingBufferBBO.h           Lock-free SPSC queue — market-data egress
 │   │   └── UdpPublisher.h            UDP multicast publisher
 │   └── strategy/
 │       └── Marketmaker.h             Market-making strategy with inventory skew
 ├── apps/                             Runnable entry points
-│   ├── main.cpp                      Exchange server (TCP gateway + threaded pipeline)
+│   ├── main.cpp                      Exchange server (3-thread pipeline)
 │   ├── Simulator.cpp                 Backtest harness with synthetic order flow
 │   └── tests.h / tests.cpp           In-process functional + benchmark routines
 ├── tests/                            Standalone unit-test suites
@@ -206,17 +175,3 @@ g++ -O3 -std=c++17 -pthread \
 └── docs/
     └── pnl_curve_report.png          Sample backtest equity curve
 ```
-
-## Design Decisions
-
-**Fixed-point prices** instead of floating-point — prices are stored as `int64_t` with 4 implied decimal places ($150.00 = 1,500,000). This eliminates floating-point comparison issues in the matching engine and makes price arithmetic exact.
-
-**`std::map` for price levels** instead of a flat array — the map gives O(log n) insertion and sorted iteration, which matters when the price range is wide or unknown. A flat array would give O(1) access at a known price but waste memory and require knowing the price bounds upfront. For a general-purpose exchange with variable instruments, the map is the standard production choice.
-
-**Doubly-linked list for order queue** instead of `std::deque` — enables O(1) removal of any order by ID (via the `orderMap` hash table), which is critical for cancel and modify operations. A deque would require O(n) search to find and remove an order from the middle.
-
-**Risk checks before pool allocation** — rejected orders never consume a pool slot or touch the order book. A flood of invalid orders (from a buggy client or an attack) can't exhaust the memory pool or slow down matching for valid orders.
-
-**Cancels bypass risk** — cancellations reduce exposure. Subjecting them to collar checks or rate limits would delay risk reduction, which is the opposite of what you want in a risk event.
-
-**Busy-wait over condition variables** — the matching engine thread spins at 100% CPU utilization, but wake-up latency is bounded by cache coherence (~50ns) instead of OS scheduling (~10,000ns+). This is the standard tradeoff in latency-sensitive systems: you dedicate a physical core to polling in exchange for deterministic response time.
