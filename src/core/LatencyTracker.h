@@ -42,12 +42,14 @@ class LatencyTracker{
 
         std::cout << "\n========== LATENCY REPORT ==========\n";
         std::cout << "Samples:    " << count << " orders\n";
-        std::cout << "Average:    " << avg << " ns\n";
+        std::cout << "Mean:       " << avg << " ns\n";
         std::cout << "Min:        " << sorted.front() << " ns\n";
-        std::cout << "p50:        " << percentile(50) << " ns\n";
+        std::cout << "p50 (med):  " << percentile(50) << " ns\n";
+        std::cout << "p90:        " << percentile(90) << " ns\n";
         std::cout << "p95:        " << percentile(95) << " ns\n";
         std::cout << "p99:        " << percentile(99) << " ns\n";
         std::cout << "p99.9:      " << percentile(99.9) << " ns\n";
+        std::cout << "p99.99:     " << percentile(99.99) << " ns\n";
         std::cout << "Max:        " << sorted.back() << " ns\n";
         std::cout << "=====================================\n\n";
     }

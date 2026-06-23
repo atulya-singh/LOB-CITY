@@ -1,6 +1,6 @@
 # Ultra-Low Latency Limit Order Book Engine
 
-A multi-threaded exchange emulator in C++ with a matching engine, pre-trade risk controls, and a market-making strategy with inventory risk management. Built on modern HFT systems principles — zero heap allocations on the critical path, lock-free inter-thread communication, no system calls on the matching thread, and a **~41 ns median / ~125 ns p99** matching latency.
+A multi-threaded exchange emulator in C++ with a matching engine, pre-trade risk controls, and a market-making strategy with inventory risk management. Built on modern HFT systems principles — zero heap allocations on the critical path, lock-free inter-thread communication, no system calls on the matching thread, and a **42 ns median / ~800 ns p99.9** matching latency over ~900K orders.
 
 The engine is organized into domain modules (`core`, `gateway`, `risk`, `marketdata`, `strategy`), with runnable apps, unit-test suites, and Python tooling for load testing, market data, and PnL visualization.
 
@@ -34,18 +34,20 @@ The network thread reads TCP bytes, parses FIX, and pushes to `orderQueue`. The 
 
 ## Performance
 
-Benchmarked on Apple Silicon (macOS) with `-O3 -march=native`, without kernel-bypass networking.
+Per-order matching latency measured over **~900K orders** of synthetic flow (mixed limit / market / cancel, both sides, prices spread across a ±20-tick band), built with `-O3 -march=native` on Apple Silicon (macOS), no kernel-bypass networking. Reproduce with `latency_bench` (see Build and Run).
 
-| Metric | Value | What It Measures |
-|:---|:---|:---|
-| Matching Latency (p50) | **~41 ns** | Order book lookup + linked-list traversal + trade record |
-| Matching Latency (p99) | **~125 ns** | Cache misses, new price-level allocation |
-| Matching Latency (p99.9) | **~1.5 µs** | Worst-case tail (cross-core scheduling jitter) |
-| Pipeline Latency | ~65 ns | Full path: FIX parse → risk → pool acquire → match |
-| Matching Throughput | **~24M orders/sec** | Sustained rate through the matching engine |
-| Pipeline Throughput | ~14M msg/sec | End-to-end: FIX → risk → gateway → engine |
+| Statistic | Latency |
+|:---|:---|
+| Mean | ~56 ns |
+| Median (p50) | **42 ns** |
+| p90 | 84 ns |
+| p99 | 167 ns |
+| p99.9 | ~800 ns |
+| p99.99 | ~1,250 ns |
 
-**Tail-latency case study.** The market-data publish was originally a synchronous `sendto()` *inside* the timed matching path. Profiling showed a bimodal distribution: a 41 ns median (orders that didn't move the book) against a ~10 µs p99.9 and ~75 µs max (orders that did, and paid the kernel crossing). Moving the `sendto()` onto a dedicated publisher thread fed by a second lock-free ring **cut p99.9 from ~10 µs to ~1.5 µs, max from ~75 µs to ~2 µs, and nearly doubled throughput (13M → 24M orders/sec)** — with no change to the median, confirming the syscall was the sole tail driver.
+Throughput sustains **~24M orders/sec** through the matching engine and **~14M msg/sec** end-to-end (FIX parse → risk → gateway → match). Max over a run reaches a few hundred microseconds across a handful of cold-start samples — first-touch page faults and one-off OS preemptions on a non–core-isolated laptop — past the p99.99 and not representative of steady state.
+
+**Tail-latency case study.** The market-data publish was originally a synchronous `sendto()` *inside* the timed matching path. Profiling showed a bimodal distribution: a ~42 ns median (orders that didn't move the book) against a ~10 µs p99.9 (orders that did, and paid the kernel crossing). Moving the `sendto()` onto a dedicated publisher thread fed by a second lock-free ring erased that tail — the sub-microsecond p99.9 above is the result — with no change to the median, confirming the syscall was the sole tail driver. Throughput nearly doubled (13M → 24M orders/sec).
 
 ## Design Decisions
 
@@ -123,6 +125,13 @@ python3 scripts/market_data_listener.py
 python3 scripts/replayer.py
 ```
 
+**Latency benchmark** (drives ~1M orders, prints the percentile report above):
+```bash
+g++ -O3 -std=c++17 -march=native -pthread \
+    apps/latency_bench.cpp src/gateway/FixParser.cpp src/core/OrderBook.cpp -o latency_bench
+./latency_bench
+```
+
 **Market maker backtest:**
 ```bash
 g++ -O3 -std=c++17 -march=native -pthread \
@@ -163,6 +172,7 @@ g++ -O3 -std=c++17 -pthread \
 │       └── Marketmaker.h             Market-making strategy with inventory skew
 ├── apps/                             Runnable entry points
 │   ├── main.cpp                      Exchange server (3-thread pipeline)
+│   ├── latency_bench.cpp             1M-order latency benchmark (percentile report)
 │   ├── Simulator.cpp                 Backtest harness with synthetic order flow
 │   └── tests.h / tests.cpp           In-process functional + benchmark routines
 ├── tests/                            Standalone unit-test suites
