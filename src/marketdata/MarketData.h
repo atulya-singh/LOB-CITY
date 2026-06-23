@@ -1,14 +1,11 @@
 #pragma once
 #include <cstdint>
 
-#pragma pack(push, 1)
-
-struct BboMessage{
-    char messageType;
+struct alignas(64) BboMessage{
     uint64_t timestamp;
-    int64_t bestBidPrice;
+    int64_t  bestBidPrice;
+    int64_t  bestAskPrice;
     uint32_t bestBidQty;
-    int64_t bestAskPrice;
     uint32_t bestAskQty;
+    char     messageType;
 };
-#pragma pack(pop)
