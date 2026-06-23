@@ -1,12 +1,13 @@
 #include "OrderBook.h"
 #include "MemoryPool.h"
 #include "LatencyTracker.h"
+#include "../marketdata/RingBufferBBO.h"
 #include <iostream>
 #include <algorithm>
 #include <chrono>
 #include <iomanip>
 
-// Uncomment the line below if you want to see trade messages again
+RingBufferBBO buffer;
 // #define ENABLE_LOGGING 
 void OrderBook::recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty){
     auto now = std::chrono::high_resolution_clock::now();
@@ -138,29 +139,6 @@ void OrderBook::cancelOrder(OrderId id) {
     publishBBO();
 }
 
-// ================================================================
-// ORDER MODIFY (Cancel/Replace)
-//
-// FIX MsgType 'G' — Order Cancel/Replace Request
-//
-// This is how real exchanges handle order modifications. The rules
-// around time priority are critical and differ between exchanges:
-//
-// CASE 1: Only quantity decreases (price unchanged)
-//   → The order KEEPS its time priority position.
-//   → Rationale: reducing size reduces risk. Punishing the trader
-//     by sending them to the back of the queue would discourage
-//     risk-reducing behavior.
-//
-// CASE 2: Price changes OR quantity increases
-//   → The order LOSES time priority — treated as cancel + new order.
-//   → Rationale: improving your price (making it more aggressive)
-//     or increasing size is equivalent to a new order. You shouldn't
-//     be able to sit at the front of the queue, then suddenly change
-//     your price to jump ahead at a better level.
-//
-// This matches the behavior of most major exchanges (Nasdaq, NYSE, CME).
-// ================================================================
 void OrderBook::modifyOrder(OrderId origId, OrderId newId, Price newPrice, Quantity newQty) {
     // Step 1: Find the original order
     auto it = orderMap.find(origId);
@@ -198,10 +176,6 @@ void OrderBook::modifyOrder(OrderId origId, OrderId newId, Price newPrice, Quant
     }
     // ============================================================
     // CASE 2: Price changed or quantity increased → lose priority
-    // This is implemented as atomic cancel + re-insert.
-    // "Atomic" means no other order can sneak in between the
-    // cancel and the re-insert — it happens in one function call
-    // with no opportunity for interleaving.
     // ============================================================
     else {
         Side side = order->side;
@@ -216,14 +190,12 @@ void OrderBook::modifyOrder(OrderId origId, OrderId newId, Price newPrice, Quant
             if (asks[oldPrice].head == nullptr) asks.erase(oldPrice);
         }
 
-        // Rewrite the order's fields in place (no pool release/acquire needed)
         order->id = newId;
         order->price = newPrice;
         order->quantity = newQty;
         order->next = nullptr;
         order->prev = nullptr;
 
-        // Re-insert at the new price level (goes to the BACK of the queue)
         addOrder(order);
     }
 
@@ -275,7 +247,6 @@ void OrderBook::publishBBO() {
     BboMessage msg;
     msg.messageType = 'B';
     
-    // Get the current time in nanoseconds
     auto now = std::chrono::high_resolution_clock::now();
     msg.timestamp = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
 
@@ -299,8 +270,7 @@ void OrderBook::publishBBO() {
         msg.bestAskQty = 0;
     }
 
-    // Blast it to the network! (Zero allocations, just raw bytes)
-    udpPub->publishBbo(msg);
+    buffer.push(msg);
 }
 double OrderBook::getVWAP() const {
     if (tradeLog.empty()) return 0.0;
