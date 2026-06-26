@@ -20,11 +20,11 @@ private:
     std::unordered_map<OrderId, Order*> orderMap;
     std::vector<Trade> tradeLog;
 
-    void matchBuyOrder(Order* buyOrder);
-    void matchSellOrder(Order* sellOrder);
+    void matchBuyOrder(Order* buyOrder, uint64_t time);
+    void matchSellOrder(Order* sellOrder, uint64_t time);
     void addOrder(Order* order);
     void publishBBO();
-    void recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty);
+    void recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty, uint64_t time);
 
 public:
     OrderBook(OrderPool* p, UdpPublisher* u = nullptr) : pool(p), udpPub(u) {

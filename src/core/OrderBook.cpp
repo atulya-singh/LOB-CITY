@@ -13,14 +13,11 @@
 // the test suites, and the simulator all share one BBO ring without needing main.cpp.
 RingBufferBBO buffer;
 // #define ENABLE_LOGGING 
-void OrderBook::recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty){
-    timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    uint64_t nanoseconds = (ts.tv_sec * 1000000000LL) + ts.tv_nsec;
-    tradeLog.push_back({buyId, sellId, price, qty, nanoseconds});
+void OrderBook::recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty, uint64_t time){
+    tradeLog.push_back({buyId, sellId, price, qty, time});
 }
 
-void OrderBook::matchBuyOrder(Order* buyOrder) {
+void OrderBook::matchBuyOrder(Order* buyOrder, uint64_t time) {
     while (buyOrder->quantity > 0 && !asks.empty()) {
         auto bestAskIt = asks.begin();
         PriceLevel& bestAskLevel = bestAskIt->second;
@@ -33,7 +30,7 @@ void OrderBook::matchBuyOrder(Order* buyOrder) {
             
             buyOrder->quantity -= tradeQty;
             restingAsk->quantity -= tradeQty;
-            recordTrade(buyOrder->id, restingAsk->id, bestAskIt->first, tradeQty);
+            recordTrade(buyOrder->id, restingAsk->id, bestAskIt->first, tradeQty, time);
             bestAskLevel.totalVolume -= tradeQty;
 
 #ifdef ENABLE_LOGGING
@@ -53,7 +50,7 @@ void OrderBook::matchBuyOrder(Order* buyOrder) {
     }
 }
 
-void OrderBook::matchSellOrder(Order* sellOrder) {
+void OrderBook::matchSellOrder(Order* sellOrder, uint64_t time) {
     while (sellOrder->quantity > 0 && !bids.empty()) {
         auto bestBidIt = bids.begin();
         PriceLevel& bestBidLevel = bestBidIt->second;
@@ -66,7 +63,7 @@ void OrderBook::matchSellOrder(Order* sellOrder) {
             
             sellOrder->quantity -= tradeQty;
             restingBid->quantity -= tradeQty;
-            recordTrade(restingBid->id, sellOrder->id, bestBidIt->first, tradeQty);
+            recordTrade(restingBid->id, sellOrder->id, bestBidIt->first, tradeQty, time);
             bestBidLevel.totalVolume -= tradeQty;
 
 #ifdef ENABLE_LOGGING
@@ -97,11 +94,11 @@ void OrderBook::addOrder(Order* order) {
 
 void OrderBook::processOrder(Order* order) {
     auto start = std::chrono::high_resolution_clock::now();
-
+    uint64_t time = std::chrono::duration_cast<std::chrono::nanoseconds>(start.time_since_epoch()).count();
     Price bidBefore = bids.empty() ? 0: bids.begin()->first;
     Price askBefore = asks.empty() ? 0: asks.begin()->first;
-    if (order->side == Side::BUY) matchBuyOrder(order);
-    else matchSellOrder(order);
+    if (order->side == Side::BUY) matchBuyOrder(order, time);
+    else matchSellOrder(order, time);
 
     if(order->quantity >0){
         if(order->isMarket){
