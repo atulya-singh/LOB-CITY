@@ -15,7 +15,7 @@ RingBufferBBO buffer;
 // #define ENABLE_LOGGING 
 void OrderBook::recordTrade(OrderId buyId, OrderId sellId, Price price, Quantity qty){
     timespec ts;
-    clock_gettime(CLOCK_REALTIME_COARSE, &ts);
+    clock_gettime(CLOCK_REALTIME, &ts);
     uint64_t nanoseconds = (ts.tv_sec * 1000000000LL) + ts.tv_nsec;
     tradeLog.push_back({buyId, sellId, price, qty, nanoseconds});
 }
